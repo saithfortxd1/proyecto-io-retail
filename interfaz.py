@@ -4,13 +4,20 @@ import pandas as pd
 import subprocess
 import sys
 import os
+import matplotlib
+matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 class LogisticsOptimizerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("MIP Retail Optimizer - Optimización Logística")
-        self.root.geometry("900x650")
+        self.root.geometry("1100x700")
         self.root.configure(bg="#f5f5f5")
+        
+        self.costo_actual = 243000
+        self.costo_optimo = None
         
         self.setup_styles()
         self.create_widgets()
@@ -19,11 +26,14 @@ class LogisticsOptimizerGUI:
         style = ttk.Style()
         style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"), background="#f5f5f5", foreground="#2c3e50")
         style.configure("Subtitle.TLabel", font=("Segoe UI", 11), background="#f5f5f5", foreground="#34495e")
+        style.configure("Section.TLabel", font=("Segoe UI", 11, "bold"), background="#f5f5f5", foreground="#2c3e50")
+        style.configure("Param.TLabel", font=("Segoe UI", 10), background="#ffffff", foreground="#34495e")
         style.configure("Result.TLabel", font=("Segoe UI", 11, "bold"), background="#ffffff", foreground="#2c3e50")
         style.configure("Value.TLabel", font=("Segoe UI", 11), background="#ffffff", foreground="#27ae60")
         style.configure("Run.TButton", font=("Segoe UI", 10, "bold"), padding=10)
         style.configure("Treeview", font=("Segoe UI", 9), rowheight=28)
         style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
+        style.configure("Card.TFrame", background="#ffffff", relief="flat")
         
     def create_widgets(self):
         # Frame principal
@@ -37,9 +47,44 @@ class LogisticsOptimizerGUI:
         subtitle_label = ttk.Label(main_frame, text="Optimización de Red de Centros de Distribución - Programación Entera Mixta", style="Subtitle.TLabel")
         subtitle_label.pack(pady=(0, 20))
         
-        # Frame de botón de ejecución
-        run_frame = ttk.Frame(main_frame)
-        run_frame.pack(fill=tk.X, pady=(0, 20))
+        # CONTENEDOR DE DOS COLUMNAS
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        content_frame.grid_columnconfigure(0, weight=1, minsize=400)
+        content_frame.grid_columnconfigure(1, weight=1, minsize=500)
+        content_frame.grid_rowconfigure(0, weight=1)
+        
+        # ========== COLUMNA IZQUIERDA ==========
+        left_frame = ttk.Frame(content_frame, style="Card.TFrame", padding=20)
+        left_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 10))
+        left_frame.grid_rowconfigure(2, weight=1)
+        
+        # Sección: Parámetros de Entrada
+        params_label = ttk.Label(left_frame, text="Parámetros de Entrada", style="Section.TLabel")
+        params_label.pack(anchor=tk.W, pady=(0, 15))
+        
+        params_card = ttk.Frame(left_frame, style="Card.TFrame", padding=15)
+        params_card.pack(fill=tk.X, pady=(0, 20))
+        
+        # Demanda Total
+        ttk.Label(params_card, text="Demanda Total:", style="Param.TLabel").grid(row=0, column=0, sticky=tk.W, pady=8)
+        ttk.Label(params_card, text="22,000 unidades", style="Value.TLabel").grid(row=0, column=1, sticky=tk.W, padx=(20, 0), pady=8)
+        
+        # Restricción de infraestructura
+        ttk.Label(params_card, text="Restricción de Infraestructura:", style="Param.TLabel").grid(row=1, column=0, sticky=tk.W, pady=8)
+        ttk.Label(params_card, text="Máximo 2 CDs operativos", style="Value.TLabel").grid(row=1, column=1, sticky=tk.W, padx=(20, 0), pady=8)
+        
+        # Ubicaciones candidatas
+        ttk.Label(params_card, text="Ubicaciones Candidatas:", style="Param.TLabel").grid(row=2, column=0, sticky=tk.W, pady=8)
+        ttk.Label(params_card, text="L1, L2, L3, L4 (4 opciones)", style="Value.TLabel").grid(row=2, column=1, sticky=tk.W, padx=(20, 0), pady=8)
+        
+        # Zonas de demanda
+        ttk.Label(params_card, text="Zonas de Demanda:", style="Param.TLabel").grid(row=3, column=0, sticky=tk.W, pady=8)
+        ttk.Label(params_card, text="Z1–Z6 (6 zonas urbanas)", style="Value.TLabel").grid(row=3, column=1, sticky=tk.W, padx=(20, 0), pady=8)
+        
+        # Botón de ejecución
+        run_frame = ttk.Frame(left_frame)
+        run_frame.pack(fill=tk.X, pady=(10, 20))
         
         self.run_button = ttk.Button(
             run_frame, 
@@ -47,13 +92,12 @@ class LogisticsOptimizerGUI:
             style="Run.TButton",
             command=self.run_optimization
         )
-        self.run_button.pack(pady=10)
+        self.run_button.pack(fill=tk.X, ipady=8)
         
         # Frame de resultados operativos
-        results_frame = ttk.LabelFrame(main_frame, text="Resultados Operativos", padding=15)
-        results_frame.pack(fill=tk.X, pady=(0, 20))
+        results_frame = ttk.LabelFrame(left_frame, text="Resultados Operativos", padding=15)
+        results_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Grid de resultados
         results_grid = ttk.Frame(results_frame)
         results_grid.pack(fill=tk.X)
         
@@ -85,22 +129,37 @@ class LogisticsOptimizerGUI:
         self.porcentaje_label = ttk.Label(results_grid, text="—", style="Value.TLabel")
         self.porcentaje_label.grid(row=4, column=1, sticky=tk.W, padx=10, pady=8)
         
-        # Frame de tabla de asignaciones
+        # ========== COLUMNA DERECHA ==========
+        right_frame = ttk.Frame(content_frame, style="Card.TFrame", padding=20)
+        right_frame.grid(row=0, column=1, sticky=tk.NSEW, padx=(10, 0))
+        right_frame.grid_rowconfigure(1, weight=1)
+        
+        # Gráfico de comparación de costos
+        chart_label = ttk.Label(right_frame, text="Comparativa de Costos Logísticos", style="Section.TLabel")
+        chart_label.pack(anchor=tk.W, pady=(0, 15))
+        
+        self.chart_frame = ttk.Frame(right_frame)
+        self.chart_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Gráfico inicial (solo costo actual)
+        self.create_cost_chart()
+        
+        # ========== TABLA INFERIOR (span completo) ==========
         table_frame = ttk.LabelFrame(main_frame, text="Plan de Asignación Logística (Centro → Zona)", padding=15)
-        table_frame.pack(fill=tk.BOTH, expand=True)
+        table_frame.pack(fill=tk.BOTH, expand=True, pady=(20, 0))
         
         # Treeview
         columns = ("Ubicacion", "Zona", "Cantidad_Enviada")
-        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=10)
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=8)
         
         # Configurar columnas
         self.tree.heading("Ubicacion", text="Centro de Distribución")
         self.tree.heading("Zona", text="Zona Urbana")
         self.tree.heading("Cantidad_Enviada", text="Unidades Enviadas")
         
-        self.tree.column("Ubicacion", width=200, anchor=tk.CENTER)
-        self.tree.column("Zona", width=200, anchor=tk.CENTER)
-        self.tree.column("Cantidad_Enviada", width=200, anchor=tk.CENTER)
+        self.tree.column("Ubicacion", width=250, anchor=tk.CENTER)
+        self.tree.column("Zona", width=250, anchor=tk.CENTER)
+        self.tree.column("Cantidad_Enviada", width=250, anchor=tk.CENTER)
         
         # Scrollbars
         v_scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
@@ -117,13 +176,66 @@ class LogisticsOptimizerGUI:
         # Cargar datos iniciales del CSV
         self.load_csv_data()
         
+    def create_cost_chart(self):
+        """Crea o actualiza el gráfico de barras comparativo"""
+        # Limpiar frame anterior
+        for widget in self.chart_frame.winfo_children():
+            widget.destroy()
+        
+        # Datos
+        labels = ['Costo Actual', 'Costo Óptimo']
+        if self.costo_optimo is not None:
+            values = [self.costo_actual, self.costo_optimo]
+            colors = ['#e74c3c', '#27ae60']
+        else:
+            values = [self.costo_actual, 0]
+            colors = ['#e74c3c', '#95a5a6']
+        
+        # Crear figura
+        fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
+        bars = ax.bar(labels, values, color=colors, edgecolor='white', linewidth=1.5, width=0.5)
+        
+        # Etiquetas de valor en las barras
+        for bar, val in zip(bars, values):
+            if val > 0:
+                height = bar.get_height()
+                ax.annotate(f'${val:,.0f}',
+                           xy=(bar.get_x() + bar.get_width() / 2, height),
+                           xytext=(0, 5),
+                           textcoords="offset points",
+                           ha='center', va='bottom',
+                           fontweight='bold', fontsize=11)
+        
+        # Estética
+        ax.set_ylabel('USD', fontsize=11, fontweight='bold')
+        ax.set_title('Costo Logístico Mensual: Actual vs. Optimizado', fontsize=12, fontweight='bold', pad=15)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(values) * 1.25 if max(values) > 0 else 300000)
+        
+        # Añadir etiqueta de ahorro si hay costo óptimo
+        if self.costo_optimo is not None:
+            ahorro = self.costo_actual - self.costo_optimo
+            pct = (ahorro / self.costo_actual) * 100
+            ax.text(0.5, 0.95, f'Ahorro: ${ahorro:,.0f} ({pct:.1f}%)',
+                   transform=ax.transAxes, ha='center', va='top',
+                   fontsize=11, fontweight='bold', color='#27ae60',
+                   bbox=dict(boxstyle='round,pad=0.5', facecolor='#e8f8f0', edgecolor='#27ae60'))
+        
+        plt.tight_layout()
+        
+        # Incrustar en Tkinter
+        canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
     def run_optimization(self):
         """Ejecuta el script de optimización y actualiza la interfaz"""
         self.run_button.config(state=tk.DISABLED, text="⏳ Ejecutando...")
         self.root.update()
         
         try:
-            # Ejecutar optimizacion.py
             result = subprocess.run(
                 [sys.executable, "optimizacion.py"],
                 capture_output=True,
@@ -132,11 +244,10 @@ class LogisticsOptimizerGUI:
             )
             
             if result.returncode == 0:
-                # Parsear salida para extraer valores
                 output = result.stdout
                 self.parse_and_update_results(output)
-                # Recargar tabla
                 self.load_csv_data()
+                self.create_cost_chart()  # Actualizar gráfico
                 self.run_button.config(state=tk.NORMAL, text="▶ Ejecutar Modelo de Optimización")
             else:
                 self.show_error(f"Error en la optimización:\n{result.stderr}")
@@ -158,7 +269,6 @@ class LogisticsOptimizerGUI:
             'porcentaje': r'Porcentaje.*?([\d,]+\.?\d*)'
         }
         
-        # Valores por defecto (resultados conocidos)
         defaults = {
             'costo_fijo': '88000',
             'costo_variable': '94500',
@@ -177,6 +287,7 @@ class LogisticsOptimizerGUI:
                 self.costo_variable_label.config(text=f"{float(value):,.2f} USD")
             elif key == 'costo_total':
                 self.costo_total_label.config(text=f"{float(value):,.2f} USD")
+                self.costo_optimo = float(value)
             elif key == 'ahorro':
                 self.ahorro_label.config(text=f"{float(value):,.2f} USD")
             elif key == 'porcentaje':
@@ -184,7 +295,6 @@ class LogisticsOptimizerGUI:
     
     def load_csv_data(self):
         """Carga y muestra los datos del archivo CSV en el Treeview"""
-        # Limpiar tabla
         for item in self.tree.get_children():
             self.tree.delete(item)
         
@@ -200,7 +310,6 @@ class LogisticsOptimizerGUI:
                         f"{row['Cantidad_Enviada']:,.0f}"
                     ))
             else:
-                # Datos por defecto si no existe el CSV
                 default_data = [
                     ("L2", "Z1", "3,000"),
                     ("L2", "Z2", "4,000"),
