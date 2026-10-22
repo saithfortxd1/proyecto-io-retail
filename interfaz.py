@@ -24,20 +24,43 @@ class LogisticsOptimizerGUI:
         
     def setup_styles(self):
         style = ttk.Style()
-        style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"), background="#f5f5f5", foreground="#2c3e50")
-        style.configure("Subtitle.TLabel", font=("Segoe UI", 11), background="#f5f5f5", foreground="#34495e")
-        style.configure("Section.TLabel", font=("Segoe UI", 11, "bold"), background="#f5f5f5", foreground="#2c3e50")
-        style.configure("Param.TLabel", font=("Segoe UI", 10), background="#ffffff", foreground="#34495e")
-        style.configure("Result.TLabel", font=("Segoe UI", 11, "bold"), background="#ffffff", foreground="#2c3e50")
-        style.configure("Value.TLabel", font=("Segoe UI", 11), background="#ffffff", foreground="#27ae60")
+        # Tema base
+        style.theme_use('clam')
+        
+        # Colores consistentes
+        BG_MAIN = "#f5f5f5"
+        BG_CARD = "#ffffff"
+        FG_DARK = "#2c3e50"
+        FG_MID = "#34495e"
+        FG_GREEN = "#27ae60"
+        FG_RED = "#e74c3c"
+        
+        # Configurar estilos globales
+        style.configure(".", background=BG_MAIN, foreground=FG_DARK, font=("Segoe UI", 10))
+        style.configure("TFrame", background=BG_MAIN)
+        style.configure("TLabelFrame", background=BG_MAIN, foreground=FG_DARK)
+        style.configure("TLabelFrame.Label", background=BG_MAIN, foreground=FG_DARK, font=("Segoe UI", 11, "bold"))
+        style.configure("TLabel", background=BG_MAIN, foreground=FG_DARK)
+        style.configure("TButton", font=("Segoe UI", 10), padding=6)
+        
+        # Estilos específicos
+        style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"), background=BG_MAIN, foreground=FG_DARK)
+        style.configure("Subtitle.TLabel", font=("Segoe UI", 11), background=BG_MAIN, foreground=FG_MID)
+        style.configure("Section.TLabel", font=("Segoe UI", 11, "bold"), background=BG_CARD, foreground=FG_DARK)
+        style.configure("Param.TLabel", font=("Segoe UI", 10), background=BG_CARD, foreground=FG_MID)
+        style.configure("Result.TLabel", font=("Segoe UI", 11, "bold"), background=BG_CARD, foreground=FG_DARK)
+        style.configure("Value.TLabel", font=("Segoe UI", 11), background=BG_CARD, foreground=FG_GREEN)
         style.configure("Run.TButton", font=("Segoe UI", 10, "bold"), padding=10)
-        style.configure("Treeview", font=("Segoe UI", 9), rowheight=28)
-        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
-        style.configure("Card.TFrame", background="#ffffff", relief="flat")
+        style.configure("Treeview", font=("Segoe UI", 9), rowheight=28, background=BG_CARD, fieldbackground=BG_CARD, foreground=FG_DARK)
+        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"), background=FG_DARK, foreground="white")
+        style.map("Treeview", background=[("selected", "#3498db")], foreground=[("selected", "white")])
+        style.configure("Card.TFrame", background=BG_CARD, relief="flat", borderwidth=0)
+        style.configure("Card.TLabelframe", background=BG_CARD, borderwidth=1, relief="solid")
+        style.configure("Card.TLabelframe.Label", background=BG_CARD, foreground=FG_DARK, font=("Segoe UI", 11, "bold"))
         
     def create_widgets(self):
         # Frame principal
-        main_frame = ttk.Frame(self.root, padding=20)
+        main_frame = ttk.Frame(self.root, padding=20, style="TFrame")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Título
@@ -48,7 +71,7 @@ class LogisticsOptimizerGUI:
         subtitle_label.pack(pady=(0, 20))
         
         # CONTENEDOR DE DOS COLUMNAS
-        content_frame = ttk.Frame(main_frame)
+        content_frame = ttk.Frame(main_frame, style="TFrame")
         content_frame.pack(fill=tk.BOTH, expand=True)
         content_frame.grid_columnconfigure(0, weight=1, minsize=400)
         content_frame.grid_columnconfigure(1, weight=1, minsize=500)
@@ -83,7 +106,7 @@ class LogisticsOptimizerGUI:
         ttk.Label(params_card, text="Z1–Z6 (6 zonas urbanas)", style="Value.TLabel").grid(row=3, column=1, sticky=tk.W, padx=(20, 0), pady=8)
         
         # Botón de ejecución
-        run_frame = ttk.Frame(left_frame)
+        run_frame = ttk.Frame(left_frame, style="Card.TFrame")
         run_frame.pack(fill=tk.X, pady=(10, 20))
         
         self.run_button = ttk.Button(
@@ -95,10 +118,10 @@ class LogisticsOptimizerGUI:
         self.run_button.pack(fill=tk.X, ipady=8)
         
         # Frame de resultados operativos
-        results_frame = ttk.LabelFrame(left_frame, text="Resultados Operativos", padding=15)
+        results_frame = ttk.LabelFrame(left_frame, text="Resultados Operativos", padding=15, style="Card.TLabelframe")
         results_frame.pack(fill=tk.BOTH, expand=True)
         
-        results_grid = ttk.Frame(results_frame)
+        results_grid = ttk.Frame(results_frame, style="Card.TFrame")
         results_grid.pack(fill=tk.X)
         
         # Costo Fijo
@@ -138,14 +161,14 @@ class LogisticsOptimizerGUI:
         chart_label = ttk.Label(right_frame, text="Comparativa de Costos Logísticos", style="Section.TLabel")
         chart_label.pack(anchor=tk.W, pady=(0, 15))
         
-        self.chart_frame = ttk.Frame(right_frame)
+        self.chart_frame = ttk.Frame(right_frame, style="Card.TFrame")
         self.chart_frame.pack(fill=tk.BOTH, expand=True)
         
         # Gráfico inicial (solo costo actual)
         self.create_cost_chart()
         
         # ========== TABLA INFERIOR (span completo) ==========
-        table_frame = ttk.LabelFrame(main_frame, text="Plan de Asignación Logística (Centro → Zona)", padding=15)
+        table_frame = ttk.LabelFrame(main_frame, text="Plan de Asignación Logística (Centro → Zona)", padding=15, style="Card.TLabelframe")
         table_frame.pack(fill=tk.BOTH, expand=True, pady=(20, 0))
         
         # Treeview
@@ -191,8 +214,11 @@ class LogisticsOptimizerGUI:
             values = [self.costo_actual, 0]
             colors = ['#e74c3c', '#95a5a6']
         
-        # Crear figura
+        # Crear figura con fondo consistente
         fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
+        fig.patch.set_facecolor('#ffffff')
+        ax.set_facecolor('#ffffff')
+        
         bars = ax.bar(labels, values, color=colors, edgecolor='white', linewidth=1.5, width=0.5)
         
         # Etiquetas de valor en las barras
@@ -204,14 +230,18 @@ class LogisticsOptimizerGUI:
                            xytext=(0, 5),
                            textcoords="offset points",
                            ha='center', va='bottom',
-                           fontweight='bold', fontsize=11)
+                           fontweight='bold', fontsize=11, color='#2c3e50')
         
         # Estética
-        ax.set_ylabel('USD', fontsize=11, fontweight='bold')
-        ax.set_title('Costo Logístico Mensual: Actual vs. Optimizado', fontsize=12, fontweight='bold', pad=15)
+        ax.set_ylabel('USD', fontsize=11, fontweight='bold', color='#2c3e50')
+        ax.set_title('Costo Logístico Mensual: Actual vs. Optimizado', fontsize=12, fontweight='bold', pad=15, color='#2c3e50')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.grid(axis='y', alpha=0.3)
+        ax.spines['left'].set_color('#bdc3c7')
+        ax.spines['bottom'].set_color('#bdc3c7')
+        ax.tick_params(axis='x', colors='#2c3e50', labelsize=10)
+        ax.tick_params(axis='y', colors='#2c3e50', labelsize=10)
+        ax.grid(axis='y', alpha=0.3, color='#bdc3c7')
         ax.set_ylim(0, max(values) * 1.25 if max(values) > 0 else 300000)
         
         # Añadir etiqueta de ahorro si hay costo óptimo
