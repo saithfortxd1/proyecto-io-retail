@@ -80,6 +80,8 @@ La MIP integra ambas decisiones en un solo modelo. El solver CBC (vía PuLP) usa
 | Garantiza el óptimo global | Solo con CD fijos | Sí, si se revisan todas | Sí |
 | Escala a muchas ubicaciones | Sí | No | Sí |
 
+---
+
 # 5.2 Explicación del Modelo Matemático
 
 ## Conjuntos, parámetros y datos de entrada
@@ -167,7 +169,9 @@ Como la demanda total (22,000) supera la capacidad del CD más grande (20,000 en
 
 ## Diagrama de red
 
-![Figura 1. Diagrama de red · 4 ubicaciones, 6 zonas, 24 arcos. Las flechas azules muestran la solución óptima.](img/diagrama_red.png)
+![Diagrama de red](img/diagrama_red.png)
+
+*Figura 1. Diagrama de red · 4 ubicaciones, 6 zonas, 24 arcos. Las flechas azules muestran la solución óptima.*
 
 Los 24 arcos $i \to j$ son las variables $x_{ij}$; las ubicaciones llevan la decisión $y_i$ y las zonas imponen su demanda $d_j$.
 
@@ -305,7 +309,7 @@ La IA generativa actuó como **co-piloto técnico**, reduciendo el tiempo de des
 ---
 
 # Referencias
- {custom-style="Bibliography"}
+
 Hillier, F. S., & Lieberman, G. J. (2010). *Introducción a la investigación de operaciones* (9.ª ed.). McGraw-Hill/Interamericana Editores.
 
 Sridharan, R. (1995). The capacitated plant location problem. *European Journal of Operational Research, 87*(2), 203–213. https://doi.org/10.1016/0377-2217(95)00042-O
