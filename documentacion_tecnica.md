@@ -58,59 +58,134 @@ La configuración actual, heredada de decisiones históricas sin optimización f
 
 ---
 
-# 5.2 Modelo Matemático
+# 5.1 Metodología Aplicada
 
-## Variables de Decisión
+*Elaborado por: Camila Hernández y Temistocle Atencio.*
 
-El problema se formula como un modelo de Programación Entera Mixta (MIP) para la optimización de la red logística de distribución. Se definen las siguientes variables de decisión:
+El problema se resuelve con **Programación Entera Mixta (MIP)**, en su forma de **problema de localización de instalaciones con capacidad** (*Capacitated Facility Location Problem*, CFLP), una de las aplicaciones clásicas de la programación entera en el diseño de redes de distribución (Hillier & Lieberman, 2010, pp. 432–433; Sridharan, 1995). Es la técnica adecuada porque el problema combina dos decisiones de naturaleza distinta que deben tomarse juntas:
 
-**Variable binaria de apertura de Centro de Distribución (CD):**
+- **Decisión estratégica, discreta:** abrir o no cada centro de distribución (CD). Un CD no se puede abrir "a medias": se abre y se paga su costo fijo completo, o no se abre. Esto exige variables **binarias** (0/1), siguiendo la formulación del problema de costo fijo (Hillier & Lieberman, 2010, pp. 439–440; Taha, 2012, pp. 325–329).
+- **Decisión operativa, continua:** cuántas unidades enviar desde cada CD abierto a cada zona. Son cantidades divisibles, por eso se usan variables **continuas** no negativas.
 
-$$y_i \in \{0, 1\} \quad \forall i \in I$$
+Un modelo de Programación Lineal o de Transporte puro no sirve por sí solo: supone que todas las ubicaciones ya están abiertas y no puede representar el costo fijo, que se paga solo si el CD se abre. Al revés, evaluar las combinaciones a mano funciona con 4 ubicaciones, pero no escala: con 20 ubicaciones candidatas hay 190 parejas posibles, cada una con su propio problema de transporte.
 
-Donde:
-- $i \in I = \{L1, L2, L3, L4\}$ representa el conjunto de ubicaciones candidatas para los centros de distribución.
-- $y_i = 1$ si el centro de distribución $i$ se abre; $y_i = 0$ en caso contrario.
+La MIP integra ambas decisiones en un solo modelo. El solver CBC (vía PuLP) usa el método de **ramificación y acotamiento** (*Branch and Bound*): resuelve la relajación lineal del problema y ramifica sobre las variables binarias hasta garantizar la solución óptima global, sin enumerar todas las combinaciones (Hillier & Lieberman, 2010, pp. 464–470; Taha, 2012, pp. 336–344).
 
-**Variable continua de flujo de envío:**
+**Comparación de técnicas para el problema**
 
-$$x_{ij} \geq 0 \quad \forall i \in I, \; \forall j \in J$$
+| Criterio | Transporte / PL | Enumeración manual | MIP (elegida) |
+|:---|:---|:---|:---|
+| Modela el costo fijo de apertura | No | Sí | Sí |
+| Decide qué CD abrir | No | Sí, uno por uno | Sí, automáticamente |
+| Garantiza el óptimo global | Solo con CD fijos | Sí, si se revisan todas | Sí |
+| Escala a muchas ubicaciones | Sí | No | Sí |
 
-Donde:
-- $j \in J = \{Z1, Z2, Z3, Z4, Z5, Z6\}$ representa el conjunto de zonas urbanas de demanda.
-- $x_{ij}$ denota el volumen de unidades enviadas desde el centro de distribución $i$ hacia la zona $j$.
+# 5.2 Explicación del Modelo Matemático
 
-## Función Objetivo
+## Conjuntos, parámetros y datos de entrada
 
-La función objetivo minimiza el costo logístico total, compuesto por la suma de los costos fijos de apertura de los centros de distribución y los costos variables de transporte:
+El modelo decide cuáles de 4 ubicaciones candidatas abrir y cuántas unidades enviar desde cada una a 6 zonas urbanas que demandan 22,000 unidades al mes.
 
-$$\min \; Z = \sum_{i \in I} C_i^{\text{fijo}} \cdot y_i + \sum_{i \in I} \sum_{j \in J} C_{ij}^{\text{transporte}} \cdot x_{ij}$$
+**Conjuntos**
 
-Donde:
-- $C_i^{\text{fijo}}$ es el costo fijo anual de apertura del centro $i$.
-- $C_{ij}^{\text{transporte}}$ es el costo unitario de transporte desde el centro $i$ a la zona $j$.
+$$I = \{L1, L2, L3, L4\},\quad J = \{Z1, Z2, Z3, Z4, Z5, Z6\}$$
+
+**Parámetros (todos mensuales)**
+
+- $f_i$: costo fijo de abrir el CD en la ubicación $i$ (USD/mes).
+- $K_i$: capacidad máxima del CD $i$ (unidades/mes).
+- $d_j$: demanda de la zona $j$ (unidades/mes).
+- $c_{ij}$: costo de envío unitario desde $i$ hasta $j$ (USD/unidad).
+- $P = 2$: número máximo de CD que se pueden abrir por política de inversión.
+
+**Tabla 1. Costo fijo y capacidad por ubicación**
+
+| Ubicación $i$ | Costo fijo $f_i$ (USD/mes) | Capacidad $K_i$ (unidades/mes) |
+|:---|---:|---:|
+| L1 | 45,000 | 15,000 |
+| L2 | 50,000 | 20,000 |
+| L3 | 38,000 | 12,000 |
+| L4 | 42,000 | 16,000 |
+
+**Tabla 2. Demanda mensual por zona**
+
+| Zona $j$ | Z1 | Z2 | Z3 | Z4 | Z5 | Z6 | Total |
+|:----------------|---------:|---------:|---------:|---------:|---------:|---------:|----------:|
+| $d_j$ (u/mes) | 3,000 | 4,000 | 5,000 | 3,500 | 2,500 | 4,000 | 22,000 |
+
+**Tabla 3. Matriz de costos de envío $c_{ij}$ (USD/unidad)**
+
+| Desde / Hacia | Z1 | Z2 | Z3 | Z4 | Z5 | Z6 |
+|:---|---:|---:|---:|---:|---:|---:|
+| L1 | 3 | 5 | 8 | 6 | 10 | 12 |
+| L2 | 6 | 3 | 4 | 7 | 8 | 9 |
+| L3 | 9 | 7 | 5 | 3 | 4 | 6 |
+| L4 | 11 | 8 | 6 | 5 | 3 | 4 |
+
+## Variables de decisión
+
+El modelo usa exactamente dos familias de variables: una binaria que decide la apertura y una continua que decide el flujo.
+
+| Variable | Tipo | Definición | Unidades |
+|:---|:---|:---|:---|
+| $y_i,\ i \in I$ | Binaria | 1 si se abre el CD en la ubicación $i$; 0 en caso contrario | Adimensional {0,1} |
+| $x_{ij},\ i \in I,\ j \in J$ | Continua no negativa | Cantidad enviada desde la ubicación $i$ hasta la zona $j$ | Unidades/mes |
+
+$$y_i \in \{0,1\}\ \ \forall i \in I;\quad x_{ij} \ge 0\ \ \forall i \in I,\ j \in J$$
+
+En total hay 4 variables binarias y 24 continuas (4 × 6).
+
+## Función objetivo
+
+Se busca minimizar el costo logístico mensual total, que es la suma de los costos fijos de los CD abiertos y los costos variables de flete.
+
+$$\min Z = \sum_{i \in I} f_i \, y_i + \sum_{i \in I} \sum_{j \in J} c_{ij} \, x_{ij}$$
+
+El primer término solo se paga si $y_i = 1$; el segundo crece con cada unidad enviada. Ese equilibrio entre abrir más CD (más costo fijo, fletes menores) o menos CD (menos costo fijo, fletes mayores) es lo que el modelo resuelve.
 
 ## Restricciones
 
-El modelo está sujeto a las siguientes restricciones operativas:
+El modelo tiene cuatro grupos de restricciones: demanda, capacidad ligada a la apertura, límite de CD y naturaleza de las variables.
 
-**1. Cumplimiento estricto de la demanda por zona:**
+**R1. Satisfacción de la demanda.** Cada zona recibe exactamente lo que demanda, sumando lo enviado desde todas las ubicaciones (6 restricciones).
 
-$$\sum_{i \in I} x_{ij} = D_j \quad \forall j \in J$$
+$$\sum_{i \in I} x_{ij} = d_j,\quad \forall j \in J$$
 
-Donde $D_j$ es la demanda de la zona $j$. Esta restricción garantiza que la totalidad de la demanda de cada zona sea satisfecha exactamente.
+**R2. Capacidad y lógica de apertura.** Un CD solo puede enviar si está abierto, y nunca más que su capacidad (4 restricciones). Si $y_i = 0$ el lado derecho vale 0 y obliga a $x_{ij} = 0$; si $y_i = 1$ se activa la capacidad $K_i$.
 
-**2. Límite de capacidad por ubicación sujeto a la variable de apertura:**
+$$\sum_{j \in J} x_{ij} \le K_i \, y_i,\quad \forall i \in I$$
 
-$$\sum_{j \in J} x_{ij} \leq K_i \cdot y_i \quad \forall i \in I$$
+**R3. Límite de infraestructura.** Por política de inversión se abren como máximo 2 CD (1 restricción).
 
-Donde $K_i$ es la capacidad máxima del centro $i$. Si $y_i = 0$ (centro cerrado), la restricción fuerza $x_{ij} = 0 \; \forall j$; si $y_i = 1$, el flujo total no puede exceder la capacidad instalada $K_i$.
+$$\sum_{i \in I} y_i \le 2$$
 
-**3. Restricción de infraestructura - máximo número de centros abiertos:**
+**R4. Naturaleza de las variables.**
 
-$$\sum_{i \in I} y_i \leq 2$$
+$$y_i \in \{0,1\}\ \ \forall i \in I;\quad x_{ij} \ge 0\ \ \forall i \in I,\ j \in J$$
 
-Esta restricción cardinal impone un límite superior de dos centros de distribución operativos simultáneamente, reflejando la limitación estratégica de infraestructura.
+Como la demanda total (22,000) supera la capacidad del CD más grande (20,000 en L2), R2 y R3 juntas obligan a abrir exactamente 2 CD.
+
+## Diagrama de red
+
+![Figura 1. Diagrama de red · 4 ubicaciones, 6 zonas, 24 arcos. Las flechas azules muestran la solución óptima.](img/diagrama_red.png)
+
+Los 24 arcos $i \to j$ son las variables $x_{ij}$; las ubicaciones llevan la decisión $y_i$ y las zonas imponen su demanda $d_j$.
+
+## Tipo de modelo y tamaño
+
+Es un modelo de Programación Entera Mixta (MIP) lineal, conocido como problema de localización de instalaciones con capacidad (CFLP): la función objetivo y todas las restricciones son lineales, y solo las variables $y_i$ son enteras.
+
+**Tabla 4. Tamaño del modelo**
+
+| Elemento | Cantidad |
+|:---|---:|
+| Variables binarias $y_i$ | 4 |
+| Variables continuas $x_{ij}$ | 24 |
+| Restricciones de demanda (R1) | 6 |
+| Restricciones de capacidad (R2) | 4 |
+| Restricción de límite de CD (R3) | 1 |
+
+La variable binaria es necesaria porque el costo fijo se paga por abrir o no abrir el CD, una decisión de todo o nada que la programación lineal continua no puede representar. Como ningún CD solo cubre las 22,000 unidades, el espacio de decisión se reduce a las 6 combinaciones de 2 CD, y el modelo elige la de menor costo total junto con el flujo $x_{ij}$ óptimo. El modelo completo, con los datos reemplazados, se presenta en el Anexo A.
 
 ---
 
@@ -226,3 +301,59 @@ La IA generativa actuó como **co-piloto técnico**, reduciendo el tiempo de des
 | **Técnicas** | Resolución rápida con PuLP y escalabilidad del script; arquitectura modular que permite extender el modelo (nuevas ubicaciones, SKUs, restricciones de inventario) sin reescritura; desacoplamiento entre motor de optimización e interfaz de usuario. |
 | **Económicas** | Reducción comprobada de costos operativos (24.90% ahorro mensual = 60,500 USD) y optimización de fletes logísticos mediante asignación matemáticamente óptima de flujos a centros de menor costo unitario de transporte. |
 | **Estratégicas** | Soporte cuantitativo a la toma de decisiones para apertura de instalaciones; capacidad de análisis de escenarios (what-if) ante variaciones de demanda, costos de combustible o expansión de red; trazabilidad completa desde datos de entrada hasta plan de asignación ejecutable (CSV). |
+
+---
+
+# Referencias
+ {custom-style="Bibliography"}
+Hillier, F. S., & Lieberman, G. J. (2010). *Introducción a la investigación de operaciones* (9.ª ed.). McGraw-Hill/Interamericana Editores.
+
+Sridharan, R. (1995). The capacitated plant location problem. *European Journal of Operational Research, 87*(2), 203–213. https://doi.org/10.1016/0377-2217(95)00042-O
+
+Taha, H. A. (2012). *Investigación de operaciones* (9.ª ed.). Pearson Educación.
+
+---
+
+# Anexo A. Modelo matemático expandido con los datos
+
+Al reemplazar en el modelo de la sección 5.2 los parámetros de las Tablas 1, 2 y 3, el modelo queda escrito así. Esta es la forma exacta que recibe el solver.
+
+**Función objetivo:**
+
+$$\min Z =  45000\,y_1 + 50000\,y_2 + 38000\,y_3 + 42000\,y_4$$
+
+$$+ 3x_{11} + 5x_{12} + 8x_{13} + 6x_{14} + 10x_{15} + 12x_{16}$$
+
+$$+ 6x_{21} + 3x_{22} + 4x_{23} + 7x_{24} + 8x_{25} + 9x_{26}$$
+
+$$+ 9x_{31} + 7x_{32} + 5x_{33} + 3x_{34} + 4x_{35} + 6x_{36}$$
+
+$$+ 11x_{41} + 8x_{42} + 6x_{43} + 5x_{44} + 3x_{45} + 4x_{46}$$
+
+**Demanda (R1):**
+
+$$x_{11} + x_{21} + x_{31} + x_{41} = 3000 \quad (Z1)$$
+
+$$x_{12} + x_{22} + x_{32} + x_{42} = 4000 \quad (Z2)$$
+
+$$x_{13} + x_{23} + x_{33} + x_{43} = 5000 \quad (Z3)$$
+
+$$x_{14} + x_{24} + x_{34} + x_{44} = 3500 \quad (Z4)$$
+
+$$x_{15} + x_{25} + x_{35} + x_{45} = 2500 \quad (Z5)$$
+
+$$x_{16} + x_{26} + x_{36} + x_{46} = 4000 \quad (Z6)$$
+
+**Capacidad (R2):**
+
+$$x_{11} + x_{12} + x_{13} + x_{14} + x_{15} + x_{16} \le 15000\,y_1 \quad (L1)$$
+
+$$x_{21} + x_{22} + x_{23} + x_{24} + x_{25} + x_{26} \le 20000\,y_2 \quad (L2)$$
+
+$$x_{31} + x_{32} + x_{33} + x_{34} + x_{35} + x_{36} \le 12000\,y_3 \quad (L3)$$
+
+$$x_{41} + x_{42} + x_{43} + x_{44} + x_{45} + x_{46} \le 16000\,y_4 \quad (L4)$$
+
+**Infraestructura (R3) y naturaleza de las variables (R4):**
+
+$$y_1 + y_2 + y_3 + y_4 \le 2;\quad y_i \in \{0,1\};\quad x_{ij} \ge 0$$
