@@ -32,6 +32,7 @@ class LogisticsOptimizerGUI:
         
         self.costo_actual = COSTO_BASELINE_DEFAULT
         self.costo_optimo = None
+        self.modo_edicion = False  # Nuevo: estado de modo edición
         
         # Variables para almacenar referencias a los Entry
         self.entry_vars = {}
@@ -39,6 +40,7 @@ class LogisticsOptimizerGUI:
         self.setup_styles()
         self.create_widgets()
         self.cargar_valores_iniciales()
+        self.bloquear_campos()  # Iniciar en modo protegido
         
     def setup_styles(self):
         style = ttk.Style()
@@ -50,6 +52,7 @@ class LogisticsOptimizerGUI:
         FG_MID = "#34495e"
         FG_GREEN = "#27ae60"
         FG_RED = "#e74c3c"
+        FG_ORANGE = "#e67e22"
         
         style.configure(".", background=BG_MAIN, foreground=FG_DARK, font=("Segoe UI", 10))
         style.configure("TFrame", background=BG_MAIN)
@@ -66,6 +69,8 @@ class LogisticsOptimizerGUI:
         style.configure("Value.TLabel", font=("Segoe UI", 11), background=BG_CARD, foreground=FG_GREEN)
         style.configure("Run.TButton", font=("Segoe UI", 10, "bold"), padding=10)
         style.configure("Restore.TButton", font=("Segoe UI", 9), padding=6)
+        style.configure("Edit.TButton", font=("Segoe UI", 9, "bold"), padding=6, foreground=FG_ORANGE)
+        style.configure("Confirm.TButton", font=("Segoe UI", 9, "bold"), padding=8, foreground="white", background=FG_GREEN)
         style.configure("Treeview", font=("Segoe UI", 9), rowheight=28, background=BG_CARD, fieldbackground=BG_CARD, foreground=FG_DARK)
         style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"), background=FG_DARK, foreground="white")
         style.map("Treeview", background=[("selected", "#3498db")], foreground=[("selected", "white")])
@@ -116,12 +121,35 @@ class LogisticsOptimizerGUI:
         left_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 10))
         left_frame.grid_rowconfigure(2, weight=1)
         
-        # Sección: Parámetros de Entrada EDITABLES
+        # Sección: Parámetros de Entrada con modo protegido
         params_header_frame = ttk.Frame(left_frame, style="Card.TFrame")
         params_header_frame.pack(fill=tk.X, pady=(0, 10))
         
-        params_label = ttk.Label(params_header_frame, text="Parámetros de Entrada (Editables)", style="Section.TLabel")
+        params_label = ttk.Label(params_header_frame, text="Parámetros de Entrada", style="Section.TLabel")
         params_label.pack(side=tk.LEFT, anchor=tk.W)
+        
+        # Etiqueta de estado del modo
+        self.modo_label = ttk.Label(params_header_frame, text="🔒 Modo Protegido (Valores Oficiales)", 
+                                     font=("Segoe UI", 9, "italic"), foreground="#e74c3c", background="#ffffff")
+        self.modo_label.pack(side=tk.LEFT, padx=(15, 0))
+        
+        # Botón Habilitar Edición
+        self.edit_button = ttk.Button(
+            params_header_frame,
+            text="🔓 Habilitar Edición",
+            style="Edit.TButton",
+            command=self.habilitar_edicion
+        )
+        self.edit_button.pack(side=tk.RIGHT, padx=(5, 0))
+        
+        # Botón Confirmar y Recalcular (inicialmente oculto)
+        self.confirm_button = ttk.Button(
+            params_header_frame,
+            text="✅ Confirmar y Recalcular en Tiempo Real",
+            style="Confirm.TButton",
+            command=self.confirmar_y_recalcular
+        )
+        # No se hace pack() hasta que se habilite edición
         
         # Botón Restaurar Valores Base
         self.restore_button = ttk.Button(
@@ -130,7 +158,7 @@ class LogisticsOptimizerGUI:
             style="Restore.TButton",
             command=self.restaurar_valores_base
         )
-        self.restore_button.pack(side=tk.RIGHT)
+        self.restore_button.pack(side=tk.RIGHT, padx=(5, 0))
         
         # Notebook para organizar parámetros en pestañas
         self.notebook = ttk.Notebook(left_frame)
@@ -288,10 +316,115 @@ class LogisticsOptimizerGUI:
         self.entry_baseline.delete(0, tk.END)
         self.entry_baseline.insert(0, f"{COSTO_BASELINE_DEFAULT:,}")
         
+    def bloquear_campos(self):
+        """Bloquea todos los campos Entry en modo solo lectura"""
+        for entry in self.entry_vars.values():
+            entry.configure(state='readonly')
+        self.modo_edicion = False
+        self.modo_label.config(text="🔒 Modo Protegido (Valores Oficiales)", foreground="#e74c3c")
+        self.edit_button.pack(side=tk.RIGHT, padx=(5, 0))
+        self.confirm_button.pack_forget()
+        
+    def desbloquear_campos(self):
+        """Desbloquea todos los campos Entry para edición"""
+        for entry in self.entry_vars.values():
+            entry.configure(state='normal')
+        self.modo_edicion = True
+        self.modo_label.config(text="✏️ Modo Edición Activo", foreground="#27ae60")
+        self.edit_button.pack_forget()
+        self.confirm_button.pack(side=tk.RIGHT, padx=(5, 0))
+        
+    def habilitar_edicion(self):
+        """Muestra confirmación y habilita modo edición"""
+        if messagebox.askyesno(
+            "Confirmar Edición",
+            "¿Deseas desbloquear los parámetros del modelo para realizar una simulación personalizada?",
+            icon="question"
+        ):
+            self.desbloquear_campos()
+        
+    def confirmar_y_recalcular(self):
+        """Valida, confirma y recalcula con nuevos parámetros"""
+        # Validar parámetros
+        try:
+            costos_fijos, capacidades, demandas, max_centros, baseline = self.leer_parametros_ui()
+        except ValueError as e:
+            messagebox.showerror("Error de Validación", str(e))
+            return
+        
+        # Confirmación de recálculo
+        if not messagebox.askyesno(
+            "Confirmar Simulación",
+            "¿Confirmas recalcular el modelo con los nuevos parámetros personalizados?\n\n"
+            "Esto actualizará los KPIs, gráfico y tabla de asignación.",
+            icon="question"
+        ):
+            return
+        
+        # Ejecutar optimización
+        self.run_button.config(state=tk.DISABLED, text="⏳ Ejecutando...")
+        self.costo_actual = baseline
+        self.root.update()
+        
+        try:
+            resultado = resolver_modelo(
+                costos_fijos=costos_fijos,
+                capacidades=capacidades,
+                demandas=demandas,
+                costos_envio=COSTOS_ENVIO_DEFAULT,
+                max_centros=max_centros,
+                zonas=ZONAS_DEFAULT,
+                ubicaciones=UBICACIONES_DEFAULT,
+                costo_baseline=baseline
+            )
+            
+            if resultado['estado'] == 'Optimal':
+                self.actualizar_resultados(resultado)
+                self.load_csv_data_from_result(resultado['asignaciones'])
+                self.create_cost_chart()
+                # Bloquear nuevamente tras confirmación exitosa
+                self.bloquear_campos()
+                messagebox.showinfo(
+                    "Simulación Completada",
+                    "Simulación actualizada y bloqueada correctamente.\n\n"
+                    f"Nuevo Costo Total Óptimo: ${resultado['costo_total']:,.2f}\n"
+                    f"Ahorro: ${resultado['ahorro']:,.2f} ({resultado['porcentaje_ahorro']:.2f}%)"
+                )
+            else:
+                messagebox.showerror("Error en Optimización", 
+                    f"Estado: {resultado['estado']}\n{resultado['mensaje']}")
+            
+            self.run_button.config(state=tk.NORMAL, text="▶ Ejecutar Modelo de Optimización")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Error inesperado: {str(e)}")
+            self.run_button.config(state=tk.NORMAL, text="▶ Ejecutar Modelo de Optimización")
+    
     def restaurar_valores_base(self):
-        """Restaura todos los campos a los valores originales del estudio"""
-        self.cargar_valores_iniciales()
-        messagebox.showinfo("Valores Restaurados", "Todos los parámetros han sido restablecidos a los valores base del caso de estudio.")
+        """Restaura todos los campos a los valores originales con confirmación"""
+        if messagebox.askyesno(
+            "Confirmar Restauración",
+            "¿Estás seguro de restaurar todos los parámetros a los valores oficiales del estudio?",
+            icon="question"
+        ):
+            self.cargar_valores_iniciales()
+            self.bloquear_campos()  # Asegura modo protegido
+            # Recalcular automáticamente el óptimo oficial
+            self.run_optimization_silencioso()
+            messagebox.showinfo("Valores Restaurados", 
+                "Todos los parámetros han sido restablecidos a los valores base del caso de estudio.\n"
+                "El modelo se ha recalculado automáticamente ($182,500 USD / 24.90% ahorro).")
+    
+    def run_optimization_silencioso(self):
+        """Ejecuta optimización sin interacción para restaurar valores base"""
+        try:
+            resultado = resolver_modelo()
+            if resultado['estado'] == 'Optimal':
+                self.actualizar_resultados(resultado)
+                self.load_csv_data_from_result(resultado['asignaciones'])
+                self.create_cost_chart()
+        except Exception as e:
+            print(f"Error en recálculo silencioso: {e}")
         
     def leer_parametros_ui(self):
         """Lee y valida los parámetros desde los campos Entry"""
@@ -392,7 +525,13 @@ class LogisticsOptimizerGUI:
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         
     def run_optimization(self):
-        """Ejecuta la optimización con los parámetros personalizados"""
+        """Ejecuta la optimización con los parámetros personalizados (solo en modo edición)"""
+        if not self.modo_edicion:
+            messagebox.showinfo("Modo Protegido", 
+                "Los parámetros están bloqueados para proteger los valores oficiales.\n\n"
+                "Haz clic en '🔓 Habilitar Edición' para desbloquear y personalizar.")
+            return
+        
         # Leer y validar parámetros
         try:
             costos_fijos, capacidades, demandas, max_centros, baseline = self.leer_parametros_ui()
@@ -405,7 +544,6 @@ class LogisticsOptimizerGUI:
         self.root.update()
         
         try:
-            # Llamar a la función refactorizada
             resultado = resolver_modelo(
                 costos_fijos=costos_fijos,
                 capacidades=capacidades,
@@ -472,7 +610,7 @@ class LogisticsOptimizerGUI:
                     ))
             else:
                 # Cargar resultado por defecto
-                self.run_optimization()
+                self.run_optimization_silencioso()
         except Exception as e:
             print(f"Error cargando CSV: {e}")
     
