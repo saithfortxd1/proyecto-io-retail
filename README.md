@@ -22,10 +22,53 @@ El modelo decide **qué centros abrir** y **cómo asignar la demanda** para mini
 
 | Archivo | Descripción |
 |---------|-------------|
-| `optimizacion.py` | Script principal: modelo MIP, resolución con CBC, exportación de resultados |
-| `interfaz.py` | Interfaz gráfica (Tkinter) para ejecución visual y análisis de resultados |
+| `optimizacion.py` | Motor matemático desacoplado: función `resolver_modelo(...)` reutilizable + ejecución CLI |
+| `interfaz.py` | Interfaz gráfica (Tkinter) con pantalla completa (`F11`/`Esc`), KPIs, gráfico Matplotlib y tabla |
 | `asignacion_logistica.csv` | Plan de asignación óptima (Centro → Zona, unidades) |
-| `documentacion_tecnica.md` | Secciones 1-5, 7-8, 13-15: Modelo completo, metodología, resultados, sensibilidad, conclusiones |
+| `documentacion_tecnica.md` | Informe técnico completo (secciones 1-5, 7-8, 13-15, referencias APA, Anexo A) |
+| `pitch_comercial.md` | Solo en rama `feature/pitch-comercial`: modelo de negocio y propuesta de valor |
+
+---
+
+## Arquitectura de Ramas (Git Workflow)
+
+Este repositorio sigue una estrategia de **ramas por propósito** para separar código estable de experimentación y documentación comercial:
+
+| Rama | Propósito | Estado |
+|------|-----------|--------|
+| **`main`** | **Versión estable y determinística** — Parámetros oficiales del caso de estudio congelados. Resultado óptimo verificado: **$182,500 USD** (ahorro 24.90%). Recomendada para evaluación, auditoría y despliegue. | 🟢 Protegida / Base |
+| **`feature/simulacion-parametrizable`** | **Entorno de análisis de sensibilidad interactivo** — Interfaz en pantalla completa (`F11` / `Esc`), pestañas editables (`ttk.Notebook`) para modificar costos fijos, capacidades, demandas y límite de CDs en tiempo real. Incluye botón **"Restaurar Valores Base"**. Motor `resolver_modelo(...)` desacoplado para recálculo instantáneo. | 🟡 Experimental |
+| **`feature/pitch-comercial`** | **Documentación comercial aislada** — Archivo `pitch_comercial.md` con definición de producto, justificación financiera ($60,500 USD/mes ahorro), público objetivo y modelo de negocio (consultoría + licenciamiento). No afecta código técnico. | 🔵 Documental |
+
+> **Nota:** Las ramas `feature/*` pueden divergir de `main` para incluir funcionalidades en desarrollo. Para obtener el caso de estudio oficial, siempre usar `main`.
+
+---
+
+## Cómo cambiar entre modos
+
+### Para ejecutar el simulador interactivo (análisis de sensibilidad)
+```bash
+git checkout feature/simulacion-parametrizable
+python interfaz.py
+```
+- Ventana maximizada automáticamente (`F11` alterna, `Esc` sale)
+- 3 pestañas: **Centros** (costos fijos/capacidades L1–L4), **Demandas** (Z1–Z6), **Configuración** (máx. CDs, baseline)
+- Botón **▶ Ejecutar Modelo de Optimización** recalcula en vivo
+- Botón **↩ Restaurar Valores Base** devuelve al caso oficial
+
+### Para volver a la versión base intacta (caso de estudio oficial)
+```bash
+git checkout main
+python interfaz.py
+```
+- Parámetros congelados, resultado determinístico $182,500 USD / 24.90%
+- Interfaz estándar sin edición de parámetros
+
+### Para consultar la propuesta comercial
+```bash
+git checkout feature/pitch-comercial
+cat pitch_comercial.md
+```
 
 ---
 
@@ -45,7 +88,7 @@ $$\min \sum_i C_i^{\text{fijo}} y_i + \sum_i \sum_j C_{ij}^{\text{transporte}} x
 
 ---
 
-## Resultados Principales
+## Resultados Principales (Caso Base en `main`)
 
 | Métrica | Valor |
 |---------|-------|
@@ -87,11 +130,18 @@ python optimizacion.py
 ```
 Genera `asignacion_logistica.csv` e imprime resultados en consola.
 
-### Interfaz gráfica
+### Interfaz gráfica (modo base en `main`)
 ```bash
 python interfaz.py
 ```
 Ventana con botón de ejecución, panel de KPIs, gráfico comparativo de costos y tabla interactiva de asignaciones.
+
+### Interfaz gráfica (modo simulación en `feature/simulacion-parametrizable`)
+```bash
+git checkout feature/simulacion-parametrizable
+python interfaz.py
+```
+Pantalla completa, parámetros editables en pestañas, recálculo en vivo.
 
 ---
 
