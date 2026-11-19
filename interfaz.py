@@ -1,33 +1,49 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import pandas as pd
-import subprocess
-import sys
 import os
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
+# Importar la función refactorizada
+from optimizacion import resolver_modelo, ZONAS_DEFAULT, UBICACIONES_DEFAULT, DEMANDA_DEFAULT, COSTOS_FIJOS_DEFAULT, CAPACIDADES_DEFAULT, MAX_CENTROS_DEFAULT, COSTOS_ENVIO_DEFAULT, COSTO_BASELINE_DEFAULT
+
+
 class LogisticsOptimizerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("MIP Retail Optimizer - Optimización Logística")
-        self.root.geometry("1100x700")
+        self.root.geometry("1200x800")
         self.root.configure(bg="#f5f5f5")
         
-        self.costo_actual = 243000
+        # Pantalla completa en Windows
+        try:
+            self.root.state('zoomed')
+        except:
+            # Fallback multiplataforma
+            self.root.attributes('-zoomed', True)
+        
+        # Toggle fullscreen con F11 y salir con Esc
+        self.fullscreen = True
+        self.root.bind('<F11>', self.toggle_fullscreen)
+        self.root.bind('<Escape>', self.end_fullscreen)
+        
+        self.costo_actual = COSTO_BASELINE_DEFAULT
         self.costo_optimo = None
+        
+        # Variables para almacenar referencias a los Entry
+        self.entry_vars = {}
         
         self.setup_styles()
         self.create_widgets()
+        self.cargar_valores_iniciales()
         
     def setup_styles(self):
         style = ttk.Style()
-        # Tema base
         style.theme_use('clam')
         
-        # Colores consistentes
         BG_MAIN = "#f5f5f5"
         BG_CARD = "#ffffff"
         FG_DARK = "#2c3e50"
@@ -35,7 +51,6 @@ class LogisticsOptimizerGUI:
         FG_GREEN = "#27ae60"
         FG_RED = "#e74c3c"
         
-        # Configurar estilos globales
         style.configure(".", background=BG_MAIN, foreground=FG_DARK, font=("Segoe UI", 10))
         style.configure("TFrame", background=BG_MAIN)
         style.configure("TLabelFrame", background=BG_MAIN, foreground=FG_DARK)
@@ -43,7 +58,6 @@ class LogisticsOptimizerGUI:
         style.configure("TLabel", background=BG_MAIN, foreground=FG_DARK)
         style.configure("TButton", font=("Segoe UI", 10), padding=6)
         
-        # Estilos específicos
         style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"), background=BG_MAIN, foreground=FG_DARK)
         style.configure("Subtitle.TLabel", font=("Segoe UI", 11), background=BG_MAIN, foreground=FG_MID)
         style.configure("Section.TLabel", font=("Segoe UI", 11, "bold"), background=BG_CARD, foreground=FG_DARK)
@@ -51,6 +65,7 @@ class LogisticsOptimizerGUI:
         style.configure("Result.TLabel", font=("Segoe UI", 11, "bold"), background=BG_CARD, foreground=FG_DARK)
         style.configure("Value.TLabel", font=("Segoe UI", 11), background=BG_CARD, foreground=FG_GREEN)
         style.configure("Run.TButton", font=("Segoe UI", 10, "bold"), padding=10)
+        style.configure("Restore.TButton", font=("Segoe UI", 9), padding=6)
         style.configure("Treeview", font=("Segoe UI", 9), rowheight=28, background=BG_CARD, fieldbackground=BG_CARD, foreground=FG_DARK)
         style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"), background=FG_DARK, foreground="white")
         style.map("Treeview", background=[("selected", "#3498db")], foreground=[("selected", "white")])
@@ -67,21 +82,17 @@ class LogisticsOptimizerGUI:
         v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # Frame principal dentro del canvas
         main_frame = ttk.Frame(canvas, padding=20, style="TFrame")
         canvas_window = canvas.create_window((0, 0), window=main_frame, anchor=tk.NW)
         
-        # Actualizar scrollregion cuando cambie el contenido
         def on_frame_configure(event):
             canvas.configure(scrollregion=canvas.bbox("all"))
         main_frame.bind("<Configure>", on_frame_configure)
         
-        # Ajustar ancho del frame al canvas
         def on_canvas_configure(event):
             canvas.itemconfig(canvas_window, width=event.width)
         canvas.bind("<Configure>", on_canvas_configure)
         
-        # Scroll con rueda del ratón
         def on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         canvas.bind_all("<MouseWheel>", on_mousewheel)
@@ -96,8 +107,8 @@ class LogisticsOptimizerGUI:
         # CONTENEDOR DE DOS COLUMNAS
         content_frame = ttk.Frame(main_frame, style="TFrame")
         content_frame.pack(fill=tk.BOTH, expand=True)
-        content_frame.grid_columnconfigure(0, weight=1, minsize=400)
-        content_frame.grid_columnconfigure(1, weight=1, minsize=500)
+        content_frame.grid_columnconfigure(0, weight=1, minsize=450)
+        content_frame.grid_columnconfigure(1, weight=1, minsize=550)
         content_frame.grid_rowconfigure(0, weight=1)
         
         # ========== COLUMNA IZQUIERDA ==========
@@ -105,30 +116,76 @@ class LogisticsOptimizerGUI:
         left_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 10))
         left_frame.grid_rowconfigure(2, weight=1)
         
-        # Sección: Parámetros de Entrada (espaciado compacto)
-        params_label = ttk.Label(left_frame, text="Parámetros de Entrada", style="Section.TLabel")
-        params_label.pack(anchor=tk.W, pady=(0, 10))
+        # Sección: Parámetros de Entrada EDITABLES
+        params_header_frame = ttk.Frame(left_frame, style="Card.TFrame")
+        params_header_frame.pack(fill=tk.X, pady=(0, 10))
         
-        params_card = ttk.Frame(left_frame, style="Card.TFrame", padding=12)
-        params_card.pack(fill=tk.X, pady=(0, 12))
+        params_label = ttk.Label(params_header_frame, text="Parámetros de Entrada (Editables)", style="Section.TLabel")
+        params_label.pack(side=tk.LEFT, anchor=tk.W)
         
-        # Demanda Total
-        ttk.Label(params_card, text="Demanda Total:", style="Param.TLabel").grid(row=0, column=0, sticky=tk.W, pady=4)
-        ttk.Label(params_card, text="22,000 unidades", style="Value.TLabel").grid(row=0, column=1, sticky=tk.W, padx=(20, 0), pady=4)
+        # Botón Restaurar Valores Base
+        self.restore_button = ttk.Button(
+            params_header_frame,
+            text="↩ Restaurar Valores Base",
+            style="Restore.TButton",
+            command=self.restaurar_valores_base
+        )
+        self.restore_button.pack(side=tk.RIGHT)
         
-        # Restricción de infraestructura
-        ttk.Label(params_card, text="Restricción de Infraestructura:", style="Param.TLabel").grid(row=1, column=0, sticky=tk.W, pady=4)
-        ttk.Label(params_card, text="Máximo 2 CDs operativos", style="Value.TLabel").grid(row=1, column=1, sticky=tk.W, padx=(20, 0), pady=4)
+        # Notebook para organizar parámetros en pestañas
+        self.notebook = ttk.Notebook(left_frame)
+        self.notebook.pack(fill=tk.X, pady=(0, 12))
         
-        # Ubicaciones candidatas
-        ttk.Label(params_card, text="Ubicaciones Candidatas:", style="Param.TLabel").grid(row=2, column=0, sticky=tk.W, pady=4)
-        ttk.Label(params_card, text="L1, L2, L3, L4 (4 opciones)", style="Value.TLabel").grid(row=2, column=1, sticky=tk.W, padx=(20, 0), pady=4)
+        # --- Pestaña 1: Centros de Distribución ---
+        self.tab_cds = ttk.Frame(self.notebook, style="Card.TFrame", padding=10)
+        self.notebook.add(self.tab_cds, text="🏢 Centros (Costos Fijos y Capacidades)")
         
-        # Zonas de demanda
-        ttk.Label(params_card, text="Zonas de Demanda:", style="Param.TLabel").grid(row=3, column=0, sticky=tk.W, pady=4)
-        ttk.Label(params_card, text="Z1–Z6 (6 zonas urbanas)", style="Value.TLabel").grid(row=3, column=1, sticky=tk.W, padx=(20, 0), pady=4)
+        # Headers
+        ttk.Label(self.tab_cds, text="Centro", style="Section.TLabel").grid(row=0, column=0, padx=10, pady=6)
+        ttk.Label(self.tab_cds, text="Costo Fijo (USD/mes)", style="Section.TLabel").grid(row=0, column=1, padx=10, pady=6)
+        ttk.Label(self.tab_cds, text="Capacidad (unidades/mes)", style="Section.TLabel").grid(row=0, column=2, padx=10, pady=6)
         
-        # Botón de ejecución (espaciado compacto)
+        for i, ubicacion in enumerate(UBICACIONES_DEFAULT):
+            row = i + 1
+            ttk.Label(self.tab_cds, text=ubicacion, style="Param.TLabel").grid(row=row, column=0, padx=10, pady=4, sticky=tk.W)
+            
+            entry_costo = ttk.Entry(self.tab_cds, width=18, font=("Segoe UI", 10))
+            entry_costo.grid(row=row, column=1, padx=10, pady=4)
+            self.entry_vars[f'costo_fijo_{i}'] = entry_costo
+            
+            entry_cap = ttk.Entry(self.tab_cds, width=18, font=("Segoe UI", 10))
+            entry_cap.grid(row=row, column=2, padx=10, pady=4)
+            self.entry_vars[f'capacidad_{i}'] = entry_cap
+        
+        # --- Pestaña 2: Demandas ---
+        self.tab_demandas = ttk.Frame(self.notebook, style="Card.TFrame", padding=10)
+        self.notebook.add(self.tab_demandas, text="📍 Demandas por Zona")
+        
+        ttk.Label(self.tab_demandas, text="Zona", style="Section.TLabel").grid(row=0, column=0, padx=10, pady=6)
+        ttk.Label(self.tab_demandas, text="Demanda (unidades/mes)", style="Section.TLabel").grid(row=0, column=1, padx=10, pady=6)
+        
+        for j, zona in enumerate(ZONAS_DEFAULT):
+            row = j + 1
+            ttk.Label(self.tab_demandas, text=zona, style="Param.TLabel").grid(row=row, column=0, padx=10, pady=4, sticky=tk.W)
+            entry_dem = ttk.Entry(self.tab_demandas, width=18, font=("Segoe UI", 10))
+            entry_dem.grid(row=row, column=1, padx=10, pady=4)
+            self.entry_vars[f'demanda_{j}'] = entry_dem
+        
+        # --- Pestaña 3: Configuración General ---
+        self.tab_config = ttk.Frame(self.notebook, style="Card.TFrame", padding=10)
+        self.notebook.add(self.tab_config, text="⚙️ Configuración")
+        
+        ttk.Label(self.tab_config, text="Máximo de CDs a abrir:", style="Param.TLabel").grid(row=0, column=0, padx=10, pady=8, sticky=tk.W)
+        self.entry_max_centros = ttk.Entry(self.tab_config, width=10, font=("Segoe UI", 10))
+        self.entry_max_centros.grid(row=0, column=1, padx=10, pady=8, sticky=tk.W)
+        self.entry_vars['max_centros'] = self.entry_max_centros
+        
+        ttk.Label(self.tab_config, text="Costo Baseline (USD/mes):", style="Param.TLabel").grid(row=1, column=0, padx=10, pady=8, sticky=tk.W)
+        self.entry_baseline = ttk.Entry(self.tab_config, width=18, font=("Segoe UI", 10))
+        self.entry_baseline.grid(row=1, column=1, padx=10, pady=8, sticky=tk.W)
+        self.entry_vars['baseline'] = self.entry_baseline
+        
+        # Botón de ejecución
         run_frame = ttk.Frame(left_frame, style="Card.TFrame")
         run_frame.pack(fill=tk.X, pady=(6, 12))
         
@@ -138,40 +195,34 @@ class LogisticsOptimizerGUI:
             style="Run.TButton",
             command=self.run_optimization
         )
-        self.run_button.pack(fill=tk.X, ipady=6)
+        self.run_button.pack(fill=tk.X, ipady=8)
         
-        # Frame de resultados operativos (compacto)
+        # Frame de resultados operativos
         results_frame = ttk.LabelFrame(left_frame, text="Resultados Operativos", padding=12, style="Card.TLabelframe")
-        results_frame.pack(fill=tk.X, pady=(0, 0))  # No expand, solo fill X
+        results_frame.pack(fill=tk.X, pady=(0, 0))
         
         results_grid = ttk.Frame(results_frame, style="Card.TFrame")
         results_grid.pack(fill=tk.X)
         
-        # 5 filas de métricas con pady compacto (4)
-        # Costo Fijo
+        # 5 filas de métricas
         ttk.Label(results_grid, text="Costo Fijo Óptimo:", style="Result.TLabel").grid(row=0, column=0, sticky=tk.W, padx=10, pady=4)
         self.costo_fijo_label = ttk.Label(results_grid, text="—", style="Value.TLabel")
         self.costo_fijo_label.grid(row=0, column=1, sticky=tk.W, padx=10, pady=4)
         
-        # Costo Variable
         ttk.Label(results_grid, text="Costo Variable Óptimo:", style="Result.TLabel").grid(row=1, column=0, sticky=tk.W, padx=10, pady=4)
         self.costo_variable_label = ttk.Label(results_grid, text="—", style="Value.TLabel")
         self.costo_variable_label.grid(row=1, column=1, sticky=tk.W, padx=10, pady=4)
         
-        # Costo Total
         ttk.Label(results_grid, text="Costo Total Óptimo:", style="Result.TLabel").grid(row=2, column=0, sticky=tk.W, padx=10, pady=4)
         self.costo_total_label = ttk.Label(results_grid, text="—", style="Value.TLabel")
         self.costo_total_label.grid(row=2, column=1, sticky=tk.W, padx=10, pady=4)
         
-        # Ahorro Mensual
         ttk.Label(results_grid, text="Ahorro Mensual:", style="Result.TLabel").grid(row=3, column=0, sticky=tk.W, padx=10, pady=4)
         self.ahorro_label = ttk.Label(results_grid, text="—", style="Value.TLabel")
         self.ahorro_label.grid(row=3, column=1, sticky=tk.W, padx=10, pady=4)
         
-        # Separador visual (más delgado)
         ttk.Separator(results_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=6)
         
-        # Porcentaje de ahorro
         ttk.Label(results_grid, text="Reducción Porcentual:", style="Result.TLabel").grid(row=4, column=0, sticky=tk.W, padx=10, pady=4)
         self.porcentaje_label = ttk.Label(results_grid, text="—", style="Value.TLabel")
         self.porcentaje_label.grid(row=4, column=1, sticky=tk.W, padx=10, pady=4)
@@ -181,34 +232,29 @@ class LogisticsOptimizerGUI:
         right_frame.grid(row=0, column=1, sticky=tk.NSEW, padx=(10, 0))
         right_frame.grid_rowconfigure(1, weight=1)
         
-        # Gráfico de comparación de costos
         chart_label = ttk.Label(right_frame, text="Comparativa de Costos Logísticos", style="Section.TLabel")
         chart_label.pack(anchor=tk.W, pady=(0, 10))
         
         self.chart_frame = ttk.Frame(right_frame, style="Card.TFrame")
         self.chart_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Gráfico inicial (solo costo actual)
         self.create_cost_chart()
         
-        # ========== TABLA INFERIOR (span completo) ==========
+        # ========== TABLA INFERIOR ==========
         table_frame = ttk.LabelFrame(main_frame, text="Plan de Asignación Logística (Centro → Zona)", padding=12, style="Card.TLabelframe")
-        table_frame.pack(fill=tk.BOTH, expand=False, pady=(15, 0))  # expand=False, altura fija por contenido
+        table_frame.pack(fill=tk.BOTH, expand=False, pady=(15, 0))
         
-        # Treeview con altura fija (6 filas visibles)
         columns = ("Ubicacion", "Zona", "Cantidad_Enviada")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=6)
         
-        # Configurar columnas
         self.tree.heading("Ubicacion", text="Centro de Distribución")
         self.tree.heading("Zona", text="Zona Urbana")
         self.tree.heading("Cantidad_Enviada", text="Unidades Enviadas")
         
-        self.tree.column("Ubicacion", width=250, anchor=tk.CENTER)
-        self.tree.column("Zona", width=250, anchor=tk.CENTER)
-        self.tree.column("Cantidad_Enviada", width=250, anchor=tk.CENTER)
+        self.tree.column("Ubicacion", width=280, anchor=tk.CENTER)
+        self.tree.column("Zona", width=280, anchor=tk.CENTER)
+        self.tree.column("Cantidad_Enviada", width=280, anchor=tk.CENTER)
         
-        # Scrollbars
         v_scrollbar_tree = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         h_scrollbar_tree = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=v_scrollbar_tree.set, xscrollcommand=h_scrollbar_tree.set)
@@ -220,17 +266,83 @@ class LogisticsOptimizerGUI:
         table_frame.grid_rowconfigure(0, weight=1)
         table_frame.grid_columnconfigure(0, weight=1)
         
-        # Cargar datos iniciales del CSV
         self.load_csv_data()
         
+    def cargar_valores_iniciales(self):
+        """Carga los valores por defecto en todos los campos Entry"""
+        for i, costo in enumerate(COSTOS_FIJOS_DEFAULT):
+            self.entry_vars[f'costo_fijo_{i}'].delete(0, tk.END)
+            self.entry_vars[f'costo_fijo_{i}'].insert(0, f"{costo:,}")
+        
+        for i, cap in enumerate(CAPACIDADES_DEFAULT):
+            self.entry_vars[f'capacidad_{i}'].delete(0, tk.END)
+            self.entry_vars[f'capacidad_{i}'].insert(0, f"{cap:,}")
+        
+        for j, dem in enumerate(DEMANDA_DEFAULT):
+            self.entry_vars[f'demanda_{j}'].delete(0, tk.END)
+            self.entry_vars[f'demanda_{j}'].insert(0, f"{dem:,}")
+        
+        self.entry_max_centros.delete(0, tk.END)
+        self.entry_max_centros.insert(0, str(MAX_CENTROS_DEFAULT))
+        
+        self.entry_baseline.delete(0, tk.END)
+        self.entry_baseline.insert(0, f"{COSTO_BASELINE_DEFAULT:,}")
+        
+    def restaurar_valores_base(self):
+        """Restaura todos los campos a los valores originales del estudio"""
+        self.cargar_valores_iniciales()
+        messagebox.showinfo("Valores Restaurados", "Todos los parámetros han sido restablecidos a los valores base del caso de estudio.")
+        
+    def leer_parametros_ui(self):
+        """Lee y valida los parámetros desde los campos Entry"""
+        try:
+            costos_fijos = []
+            for i in range(len(UBICACIONES_DEFAULT)):
+                val = self.entry_vars[f'costo_fijo_{i}'].get().replace(',', '').replace('.', '')
+                if not val:
+                    raise ValueError(f"Costo fijo {UBICACIONES_DEFAULT[i]} está vacío")
+                costos_fijos.append(int(val))
+            
+            capacidades = []
+            for i in range(len(UBICACIONES_DEFAULT)):
+                val = self.entry_vars[f'capacidad_{i}'].get().replace(',', '').replace('.', '')
+                if not val:
+                    raise ValueError(f"Capacidad {UBICACIONES_DEFAULT[i]} está vacía")
+                capacidades.append(int(val))
+            
+            demandas = []
+            for j in range(len(ZONAS_DEFAULT)):
+                val = self.entry_vars[f'demanda_{j}'].get().replace(',', '').replace('.', '')
+                if not val:
+                    raise ValueError(f"Demanda {ZONAS_DEFAULT[j]} está vacía")
+                demandas.append(int(val))
+            
+            max_centros = int(self.entry_max_centros.get())
+            baseline = int(self.entry_baseline.get().replace(',', '').replace('.', ''))
+            
+            # Validaciones adicionales
+            if max_centros < 1 or max_centros > len(UBICACIONES_DEFAULT):
+                raise ValueError(f"Máximo de CDs debe estar entre 1 y {len(UBICACIONES_DEFAULT)}")
+            
+            if any(c < 0 for c in costos_fijos):
+                raise ValueError("Los costos fijos no pueden ser negativos")
+            if any(c <= 0 for c in capacidades):
+                raise ValueError("Las capacidades deben ser positivas")
+            if any(d < 0 for d in demandas):
+                raise ValueError("Las demandas no pueden ser negativas")
+            if baseline <= 0:
+                raise ValueError("El costo baseline debe ser positivo")
+            
+            return costos_fijos, capacidades, demandas, max_centros, baseline
+            
+        except ValueError as e:
+            raise ValueError(f"Parámetro inválido: {str(e)}")
+    
     def create_cost_chart(self):
-        """Crea o actualiza el gráfico de barras comparativo (figsize más compacto en altura)"""
-        # Limpiar frame anterior
         for widget in self.chart_frame.winfo_children():
             widget.destroy()
         
-        # Datos
-        labels = ['Costo Actual', 'Costo Óptimo']
+        labels = ['Costo Baseline', 'Costo Óptimo']
         if self.costo_optimo is not None:
             values = [self.costo_actual, self.costo_optimo]
             colors = ['#e74c3c', '#27ae60']
@@ -238,14 +350,12 @@ class LogisticsOptimizerGUI:
             values = [self.costo_actual, 0]
             colors = ['#e74c3c', '#95a5a6']
         
-        # Crear figura con fondo consistente - figsize más compacto en altura (3.5 vs 4)
         fig, ax = plt.subplots(figsize=(6, 3.5), dpi=100)
         fig.patch.set_facecolor('#ffffff')
         ax.set_facecolor('#ffffff')
         
         bars = ax.bar(labels, values, color=colors, edgecolor='white', linewidth=1.5, width=0.5)
         
-        # Etiquetas de valor en las barras
         for bar, val in zip(bars, values):
             if val > 0:
                 height = bar.get_height()
@@ -256,9 +366,8 @@ class LogisticsOptimizerGUI:
                            ha='center', va='bottom',
                            fontweight='bold', fontsize=11, color='#2c3e50')
         
-        # Estética
         ax.set_ylabel('USD', fontsize=11, fontweight='bold', color='#2c3e50')
-        ax.set_title('Costo Logístico Mensual: Actual vs. Optimizado', fontsize=12, fontweight='bold', pad=12, color='#2c3e50')
+        ax.set_title('Costo Logístico Mensual: Baseline vs. Optimizado', fontsize=12, fontweight='bold', pad=12, color='#2c3e50')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.spines['left'].set_color('#bdc3c7')
@@ -268,7 +377,6 @@ class LogisticsOptimizerGUI:
         ax.grid(axis='y', alpha=0.3, color='#bdc3c7')
         ax.set_ylim(0, max(values) * 1.25 if max(values) > 0 else 300000)
         
-        # Añadir etiqueta de ahorro si hay costo óptimo
         if self.costo_optimo is not None:
             ahorro = self.costo_actual - self.costo_optimo
             pct = (ahorro / self.costo_actual) * 100
@@ -279,76 +387,75 @@ class LogisticsOptimizerGUI:
         
         plt.tight_layout()
         
-        # Incrustar en Tkinter
         canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         
     def run_optimization(self):
-        """Ejecuta el script de optimización y actualiza la interfaz"""
+        """Ejecuta la optimización con los parámetros personalizados"""
+        # Leer y validar parámetros
+        try:
+            costos_fijos, capacidades, demandas, max_centros, baseline = self.leer_parametros_ui()
+        except ValueError as e:
+            messagebox.showerror("Error de Validación", str(e))
+            return
+        
         self.run_button.config(state=tk.DISABLED, text="⏳ Ejecutando...")
+        self.costo_actual = baseline
         self.root.update()
         
         try:
-            result = subprocess.run(
-                [sys.executable, "optimizacion.py"],
-                capture_output=True,
-                text=True,
-                cwd=os.path.dirname(os.path.abspath(__file__))
+            # Llamar a la función refactorizada
+            resultado = resolver_modelo(
+                costos_fijos=costos_fijos,
+                capacidades=capacidades,
+                demandas=demandas,
+                costos_envio=COSTOS_ENVIO_DEFAULT,
+                max_centros=max_centros,
+                zonas=ZONAS_DEFAULT,
+                ubicaciones=UBICACIONES_DEFAULT,
+                costo_baseline=baseline
             )
             
-            if result.returncode == 0:
-                output = result.stdout
-                self.parse_and_update_results(output)
-                self.load_csv_data()
-                self.create_cost_chart()  # Actualizar gráfico
+            if resultado['estado'] == 'Optimal':
+                self.actualizar_resultados(resultado)
+                self.load_csv_data_from_result(resultado['asignaciones'])
+                self.create_cost_chart()
                 self.run_button.config(state=tk.NORMAL, text="▶ Ejecutar Modelo de Optimización")
             else:
-                self.show_error(f"Error en la optimización:\n{result.stderr}")
+                messagebox.showerror("Error en Optimización", 
+                    f"Estado: {resultado['estado']}\n{resultado['mensaje']}")
                 self.run_button.config(state=tk.NORMAL, text="▶ Ejecutar Modelo de Optimización")
                 
         except Exception as e:
-            self.show_error(f"Error al ejecutar el modelo:\n{str(e)}")
+            messagebox.showerror("Error", f"Error inesperado: {str(e)}")
             self.run_button.config(state=tk.NORMAL, text="▶ Ejecutar Modelo de Optimización")
     
-    def parse_and_update_results(self, output):
-        """Extrae valores numéricos de la salida del script"""
-        import re
+    def actualizar_resultados(self, resultado):
+        self.costo_fijo_label.config(text=f"{resultado['costo_fijo']:,.2f} USD")
+        self.costo_variable_label.config(text=f"{resultado['costo_variable']:,.2f} USD")
+        self.costo_total_label.config(text=f"{resultado['costo_total']:,.2f} USD")
+        self.ahorro_label.config(text=f"{resultado['ahorro']:,.2f} USD")
+        self.porcentaje_label.config(text=f"{resultado['porcentaje_ahorro']:.2f}%")
+        self.costo_optimo = resultado['costo_total']
         
-        patterns = {
-            'costo_fijo': r'Costo Fijo.*?([\d,]+\.?\d*)',
-            'costo_variable': r'Costo Variable.*?([\d,]+\.?\d*)',
-            'costo_total': r'Costo Total.*?([\d,]+\.?\d*)',
-            'ahorro': r'Ahorro Mensual.*?([\d,]+\.?\d*)',
-            'porcentaje': r'Porcentaje.*?([\d,]+\.?\d*)'
-        }
+    def load_csv_data_from_result(self, asignaciones):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
         
-        defaults = {
-            'costo_fijo': '88000',
-            'costo_variable': '94500',
-            'costo_total': '182500',
-            'ahorro': '60500',
-            'porcentaje': '24.90'
-        }
+        for asignacion in asignaciones:
+            self.tree.insert("", tk.END, values=(
+                asignacion['Ubicacion'],
+                asignacion['Zona'],
+                f"{asignacion['Cantidad_Enviada']:,.0f}"
+            ))
         
-        for key, pattern in patterns.items():
-            match = re.search(pattern, output)
-            value = match.group(1).replace(',', '') if match else defaults[key]
-            
-            if key == 'costo_fijo':
-                self.costo_fijo_label.config(text=f"{float(value):,.2f} USD")
-            elif key == 'costo_variable':
-                self.costo_variable_label.config(text=f"{float(value):,.2f} USD")
-            elif key == 'costo_total':
-                self.costo_total_label.config(text=f"{float(value):,.2f} USD")
-                self.costo_optimo = float(value)
-            elif key == 'ahorro':
-                self.ahorro_label.config(text=f"{float(value):,.2f} USD")
-            elif key == 'porcentaje':
-                self.porcentaje_label.config(text=f"{float(value):.2f}%")
+        # También guardar CSV
+        df = pd.DataFrame(asignaciones)
+        df.to_csv('asignacion_logistica.csv', index=False)
     
     def load_csv_data(self):
-        """Carga y muestra los datos del archivo CSV en el Treeview"""
+        """Carga inicial desde archivo CSV si existe"""
         for item in self.tree.get_children():
             self.tree.delete(item)
         
@@ -364,31 +471,24 @@ class LogisticsOptimizerGUI:
                         f"{row['Cantidad_Enviada']:,.0f}"
                     ))
             else:
-                default_data = [
-                    ("L2", "Z1", "3,000"),
-                    ("L2", "Z2", "4,000"),
-                    ("L2", "Z3", "5,000"),
-                    ("L3", "Z4", "3,500"),
-                    ("L3", "Z5", "2,500"),
-                    ("L3", "Z6", "4,000"),
-                ]
-                for row in default_data:
-                    self.tree.insert("", tk.END, values=row)
+                # Cargar resultado por defecto
+                self.run_optimization()
         except Exception as e:
             print(f"Error cargando CSV: {e}")
     
-    def show_error(self, message):
-        """Muestra un diálogo de error"""
-        error_window = tk.Toplevel(self.root)
-        error_window.title("Error")
-        error_window.geometry("400x200")
-        error_window.configure(bg="#f5f5f5")
-        error_window.transient(self.root)
-        error_window.grab_set()
-        
-        ttk.Label(error_window, text="❌ Error", font=("Segoe UI", 12, "bold"), foreground="#e74c3c", background="#f5f5f5").pack(pady=15)
-        ttk.Label(error_window, text=message, font=("Segoe UI", 9), background="#f5f5f5", wraplength=350).pack(pady=10, padx=20)
-        ttk.Button(error_window, text="Cerrar", command=error_window.destroy).pack(pady=15)
+    def toggle_fullscreen(self, event=None):
+        self.fullscreen = not self.fullscreen
+        try:
+            self.root.state('zoomed' if self.fullscreen else 'normal')
+        except:
+            self.root.attributes('-zoomed', self.fullscreen)
+    
+    def end_fullscreen(self, event=None):
+        self.fullscreen = False
+        try:
+            self.root.state('normal')
+        except:
+            self.root.attributes('-zoomed', False)
 
 def main():
     root = tk.Tk()
