@@ -193,6 +193,79 @@ La variable binaria es necesaria porque el costo fijo se paga por abrir o no abr
 
 ---
 
+# 6 Arquitectura de Software e Implementación Computacional
+
+## 6.1 Desacoplamiento del Motor Matemático
+
+La arquitectura del sistema separa claramente el **motor de optimización** de la **capa de presentación**, permitiendo reutilización, testeabilidad y análisis de sensibilidad dinámico sin comprometer la integridad del modelo base.
+
+### Módulo `optimizacion.py` — Núcleo del Solucionador
+
+El archivo `optimizacion.py` encapsula toda la lógica del modelo MIP en una función pura y reutilizable:
+
+```python
+def resolver_modelo(
+    costos_fijos=None,
+    capacidades=None,
+    demandas=None,
+    costos_envio=None,
+    max_centros=None,
+    zonas=None,
+    ubicaciones=None,
+    costo_baseline=None
+) -> dict:
+    """
+    Resuelve el CFLP y retorna un diccionario estructurado con:
+    - estado: 'Optimal' | 'Infeasible' | 'Error'
+    - centros_abiertos: list[str]
+    - costo_fijo, costo_variable, costo_total: float
+    - ahorro, porcentaje_ahorro: float
+    - asignaciones: list[dict] con Ubicacion, Zona, Cantidad_Enviada
+    """
+```
+
+**Características clave del desacoplamiento:**
+
+| Aspecto | Beneficio |
+|---------|-----------|
+| **Función pura** | Sin efectos colaterales; misma entrada → misma salida determinística |
+| **Parámetros inyectables** | Análisis de sensibilidad programático sin modificar código base |
+| **Validaciones integradas** | Verifica factibilidad (capacidad ≥ demanda) antes de invocar solver |
+| **Retorno estructurado** | Dict tipado facilita binding a UI, exportación CSV/JSON, testing |
+| **Ejecución CLI preservada** | `if __name__ == "__main__":` mantiene compatibilidad hacia atrás |
+
+## 6.2 Capa de Presentación — `interfaz.py`
+
+La interfaz gráfica (Tkinter + Matplotlib) consume exclusivamente la función `resolver_modelo(...)`:
+
+- **Rama `main`**: Parámetros fijos hardcodeados → llamada sin argumentos → resultado determinístico ($182,500 USD / 24.90%)
+- **Rama `feature/simulacion-parametrizable`**: Parámetros editables en pestañas (`ttk.Notebook`) → lectura de `ttk.Entry` → validación → llamada con argumentos personalizados → actualización en vivo de KPIs, gráfico y tabla
+
+Esta separación permite:
+- **Análisis de sensibilidad dinámico**: El usuario modifica costos fijos, capacidades, demandas o límite de CDs y ve el impacto inmediato sin reiniciar la aplicación
+- **Restauración instantánea**: Botón "Restaurar Valores Base" recarga los parámetros oficiales del caso de estudio
+- **Auditoría**: Cambiar a `main` garantiza reproducibilidad exacta del resultado oficial
+
+## 6.3 Flujo de Datos
+
+```
+┌──────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
+│   Parámetros     │────▶│  resolver_modelo()   │────▶│  Resultados     │
+│  (costos_fijos,  │     │  - PuLP + CBC        │     │  (dict con      │
+│   capacidades,   │     │  - Branch & Bound    │     │   KPIs, DF,     │
+│   demandas, ...) │     │  - Validaciones      │     │   asignaciones) │
+└──────────────────┘     └──────────────────────┘     └─────────────────┘
+                              ▲
+                              │ Reutilizable por:
+                         ┌────┴────┐
+                         │  CLI    │  GUI (main)
+                         │  GUI    │  GUI (simulación)
+                         │  Tests  │  Notebooks
+                         └─────────┘
+```
+
+---
+
 # 13 Resultados Obtenidos
 
 ## Solución Óptima del Modelo
