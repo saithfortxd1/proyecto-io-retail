@@ -59,16 +59,39 @@ class LogisticsOptimizerGUI:
         style.configure("Card.TLabelframe.Label", background=BG_CARD, foreground=FG_DARK, font=("Segoe UI", 11, "bold"))
         
     def create_widgets(self):
-        # Frame principal
-        main_frame = ttk.Frame(self.root, padding=20, style="TFrame")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # === SCROLL GLOBAL ===
+        canvas = tk.Canvas(self.root, background="#f5f5f5", highlightthickness=0)
+        v_scrollbar = ttk.Scrollbar(self.root, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=v_scrollbar.set)
+        
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Frame principal dentro del canvas
+        main_frame = ttk.Frame(canvas, padding=20, style="TFrame")
+        canvas_window = canvas.create_window((0, 0), window=main_frame, anchor=tk.NW)
+        
+        # Actualizar scrollregion cuando cambie el contenido
+        def on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        main_frame.bind("<Configure>", on_frame_configure)
+        
+        # Ajustar ancho del frame al canvas
+        def on_canvas_configure(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+        canvas.bind("<Configure>", on_canvas_configure)
+        
+        # Scroll con rueda del ratón
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
         
         # Título
         title_label = ttk.Label(main_frame, text="MIP Retail Optimizer", style="Title.TLabel")
         title_label.pack(pady=(0, 5))
         
         subtitle_label = ttk.Label(main_frame, text="Optimización de Red de Centros de Distribución - Programación Entera Mixta", style="Subtitle.TLabel")
-        subtitle_label.pack(pady=(0, 20))
+        subtitle_label.pack(pady=(0, 15))
         
         # CONTENEDOR DE DOS COLUMNAS
         content_frame = ttk.Frame(main_frame, style="TFrame")
@@ -82,32 +105,32 @@ class LogisticsOptimizerGUI:
         left_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 10))
         left_frame.grid_rowconfigure(2, weight=1)
         
-        # Sección: Parámetros de Entrada
+        # Sección: Parámetros de Entrada (espaciado compacto)
         params_label = ttk.Label(left_frame, text="Parámetros de Entrada", style="Section.TLabel")
-        params_label.pack(anchor=tk.W, pady=(0, 15))
+        params_label.pack(anchor=tk.W, pady=(0, 10))
         
-        params_card = ttk.Frame(left_frame, style="Card.TFrame", padding=15)
-        params_card.pack(fill=tk.X, pady=(0, 20))
+        params_card = ttk.Frame(left_frame, style="Card.TFrame", padding=12)
+        params_card.pack(fill=tk.X, pady=(0, 12))
         
         # Demanda Total
-        ttk.Label(params_card, text="Demanda Total:", style="Param.TLabel").grid(row=0, column=0, sticky=tk.W, pady=8)
-        ttk.Label(params_card, text="22,000 unidades", style="Value.TLabel").grid(row=0, column=1, sticky=tk.W, padx=(20, 0), pady=8)
+        ttk.Label(params_card, text="Demanda Total:", style="Param.TLabel").grid(row=0, column=0, sticky=tk.W, pady=4)
+        ttk.Label(params_card, text="22,000 unidades", style="Value.TLabel").grid(row=0, column=1, sticky=tk.W, padx=(20, 0), pady=4)
         
         # Restricción de infraestructura
-        ttk.Label(params_card, text="Restricción de Infraestructura:", style="Param.TLabel").grid(row=1, column=0, sticky=tk.W, pady=8)
-        ttk.Label(params_card, text="Máximo 2 CDs operativos", style="Value.TLabel").grid(row=1, column=1, sticky=tk.W, padx=(20, 0), pady=8)
+        ttk.Label(params_card, text="Restricción de Infraestructura:", style="Param.TLabel").grid(row=1, column=0, sticky=tk.W, pady=4)
+        ttk.Label(params_card, text="Máximo 2 CDs operativos", style="Value.TLabel").grid(row=1, column=1, sticky=tk.W, padx=(20, 0), pady=4)
         
         # Ubicaciones candidatas
-        ttk.Label(params_card, text="Ubicaciones Candidatas:", style="Param.TLabel").grid(row=2, column=0, sticky=tk.W, pady=8)
-        ttk.Label(params_card, text="L1, L2, L3, L4 (4 opciones)", style="Value.TLabel").grid(row=2, column=1, sticky=tk.W, padx=(20, 0), pady=8)
+        ttk.Label(params_card, text="Ubicaciones Candidatas:", style="Param.TLabel").grid(row=2, column=0, sticky=tk.W, pady=4)
+        ttk.Label(params_card, text="L1, L2, L3, L4 (4 opciones)", style="Value.TLabel").grid(row=2, column=1, sticky=tk.W, padx=(20, 0), pady=4)
         
         # Zonas de demanda
-        ttk.Label(params_card, text="Zonas de Demanda:", style="Param.TLabel").grid(row=3, column=0, sticky=tk.W, pady=8)
-        ttk.Label(params_card, text="Z1–Z6 (6 zonas urbanas)", style="Value.TLabel").grid(row=3, column=1, sticky=tk.W, padx=(20, 0), pady=8)
+        ttk.Label(params_card, text="Zonas de Demanda:", style="Param.TLabel").grid(row=3, column=0, sticky=tk.W, pady=4)
+        ttk.Label(params_card, text="Z1–Z6 (6 zonas urbanas)", style="Value.TLabel").grid(row=3, column=1, sticky=tk.W, padx=(20, 0), pady=4)
         
-        # Botón de ejecución
+        # Botón de ejecución (espaciado compacto)
         run_frame = ttk.Frame(left_frame, style="Card.TFrame")
-        run_frame.pack(fill=tk.X, pady=(10, 20))
+        run_frame.pack(fill=tk.X, pady=(6, 12))
         
         self.run_button = ttk.Button(
             run_frame, 
@@ -115,42 +138,43 @@ class LogisticsOptimizerGUI:
             style="Run.TButton",
             command=self.run_optimization
         )
-        self.run_button.pack(fill=tk.X, ipady=8)
+        self.run_button.pack(fill=tk.X, ipady=6)
         
-        # Frame de resultados operativos
-        results_frame = ttk.LabelFrame(left_frame, text="Resultados Operativos", padding=15, style="Card.TLabelframe")
-        results_frame.pack(fill=tk.BOTH, expand=True)
+        # Frame de resultados operativos (compacto)
+        results_frame = ttk.LabelFrame(left_frame, text="Resultados Operativos", padding=12, style="Card.TLabelframe")
+        results_frame.pack(fill=tk.X, pady=(0, 0))  # No expand, solo fill X
         
         results_grid = ttk.Frame(results_frame, style="Card.TFrame")
         results_grid.pack(fill=tk.X)
         
+        # 5 filas de métricas con pady compacto (4)
         # Costo Fijo
-        ttk.Label(results_grid, text="Costo Fijo Óptimo:", style="Result.TLabel").grid(row=0, column=0, sticky=tk.W, padx=10, pady=8)
+        ttk.Label(results_grid, text="Costo Fijo Óptimo:", style="Result.TLabel").grid(row=0, column=0, sticky=tk.W, padx=10, pady=4)
         self.costo_fijo_label = ttk.Label(results_grid, text="—", style="Value.TLabel")
-        self.costo_fijo_label.grid(row=0, column=1, sticky=tk.W, padx=10, pady=8)
+        self.costo_fijo_label.grid(row=0, column=1, sticky=tk.W, padx=10, pady=4)
         
         # Costo Variable
-        ttk.Label(results_grid, text="Costo Variable Óptimo:", style="Result.TLabel").grid(row=1, column=0, sticky=tk.W, padx=10, pady=8)
+        ttk.Label(results_grid, text="Costo Variable Óptimo:", style="Result.TLabel").grid(row=1, column=0, sticky=tk.W, padx=10, pady=4)
         self.costo_variable_label = ttk.Label(results_grid, text="—", style="Value.TLabel")
-        self.costo_variable_label.grid(row=1, column=1, sticky=tk.W, padx=10, pady=8)
+        self.costo_variable_label.grid(row=1, column=1, sticky=tk.W, padx=10, pady=4)
         
         # Costo Total
-        ttk.Label(results_grid, text="Costo Total Óptimo:", style="Result.TLabel").grid(row=2, column=0, sticky=tk.W, padx=10, pady=8)
+        ttk.Label(results_grid, text="Costo Total Óptimo:", style="Result.TLabel").grid(row=2, column=0, sticky=tk.W, padx=10, pady=4)
         self.costo_total_label = ttk.Label(results_grid, text="—", style="Value.TLabel")
-        self.costo_total_label.grid(row=2, column=1, sticky=tk.W, padx=10, pady=8)
+        self.costo_total_label.grid(row=2, column=1, sticky=tk.W, padx=10, pady=4)
         
         # Ahorro Mensual
-        ttk.Label(results_grid, text="Ahorro Mensual:", style="Result.TLabel").grid(row=3, column=0, sticky=tk.W, padx=10, pady=8)
+        ttk.Label(results_grid, text="Ahorro Mensual:", style="Result.TLabel").grid(row=3, column=0, sticky=tk.W, padx=10, pady=4)
         self.ahorro_label = ttk.Label(results_grid, text="—", style="Value.TLabel")
-        self.ahorro_label.grid(row=3, column=1, sticky=tk.W, padx=10, pady=8)
+        self.ahorro_label.grid(row=3, column=1, sticky=tk.W, padx=10, pady=4)
         
-        # Separador visual
-        ttk.Separator(results_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+        # Separador visual (más delgado)
+        ttk.Separator(results_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=6)
         
         # Porcentaje de ahorro
-        ttk.Label(results_grid, text="Reducción Porcentual:", style="Result.TLabel").grid(row=4, column=0, sticky=tk.W, padx=10, pady=8)
+        ttk.Label(results_grid, text="Reducción Porcentual:", style="Result.TLabel").grid(row=4, column=0, sticky=tk.W, padx=10, pady=4)
         self.porcentaje_label = ttk.Label(results_grid, text="—", style="Value.TLabel")
-        self.porcentaje_label.grid(row=4, column=1, sticky=tk.W, padx=10, pady=8)
+        self.porcentaje_label.grid(row=4, column=1, sticky=tk.W, padx=10, pady=4)
         
         # ========== COLUMNA DERECHA ==========
         right_frame = ttk.Frame(content_frame, style="Card.TFrame", padding=20)
@@ -159,7 +183,7 @@ class LogisticsOptimizerGUI:
         
         # Gráfico de comparación de costos
         chart_label = ttk.Label(right_frame, text="Comparativa de Costos Logísticos", style="Section.TLabel")
-        chart_label.pack(anchor=tk.W, pady=(0, 15))
+        chart_label.pack(anchor=tk.W, pady=(0, 10))
         
         self.chart_frame = ttk.Frame(right_frame, style="Card.TFrame")
         self.chart_frame.pack(fill=tk.BOTH, expand=True)
@@ -168,12 +192,12 @@ class LogisticsOptimizerGUI:
         self.create_cost_chart()
         
         # ========== TABLA INFERIOR (span completo) ==========
-        table_frame = ttk.LabelFrame(main_frame, text="Plan de Asignación Logística (Centro → Zona)", padding=15, style="Card.TLabelframe")
-        table_frame.pack(fill=tk.BOTH, expand=True, pady=(20, 0))
+        table_frame = ttk.LabelFrame(main_frame, text="Plan de Asignación Logística (Centro → Zona)", padding=12, style="Card.TLabelframe")
+        table_frame.pack(fill=tk.BOTH, expand=False, pady=(15, 0))  # expand=False, altura fija por contenido
         
-        # Treeview
+        # Treeview con altura fija (6 filas visibles)
         columns = ("Ubicacion", "Zona", "Cantidad_Enviada")
-        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=8)
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=6)
         
         # Configurar columnas
         self.tree.heading("Ubicacion", text="Centro de Distribución")
@@ -185,13 +209,13 @@ class LogisticsOptimizerGUI:
         self.tree.column("Cantidad_Enviada", width=250, anchor=tk.CENTER)
         
         # Scrollbars
-        v_scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        h_scrollbar = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
-        self.tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        v_scrollbar_tree = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        h_scrollbar_tree = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=v_scrollbar_tree.set, xscrollcommand=h_scrollbar_tree.set)
         
         self.tree.grid(row=0, column=0, sticky=tk.NSEW)
-        v_scrollbar.grid(row=0, column=1, sticky=tk.NS)
-        h_scrollbar.grid(row=1, column=0, sticky=tk.EW)
+        v_scrollbar_tree.grid(row=0, column=1, sticky=tk.NS)
+        h_scrollbar_tree.grid(row=1, column=0, sticky=tk.EW)
         
         table_frame.grid_rowconfigure(0, weight=1)
         table_frame.grid_columnconfigure(0, weight=1)
@@ -200,7 +224,7 @@ class LogisticsOptimizerGUI:
         self.load_csv_data()
         
     def create_cost_chart(self):
-        """Crea o actualiza el gráfico de barras comparativo"""
+        """Crea o actualiza el gráfico de barras comparativo (figsize más compacto en altura)"""
         # Limpiar frame anterior
         for widget in self.chart_frame.winfo_children():
             widget.destroy()
@@ -214,8 +238,8 @@ class LogisticsOptimizerGUI:
             values = [self.costo_actual, 0]
             colors = ['#e74c3c', '#95a5a6']
         
-        # Crear figura con fondo consistente
-        fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
+        # Crear figura con fondo consistente - figsize más compacto en altura (3.5 vs 4)
+        fig, ax = plt.subplots(figsize=(6, 3.5), dpi=100)
         fig.patch.set_facecolor('#ffffff')
         ax.set_facecolor('#ffffff')
         
@@ -234,7 +258,7 @@ class LogisticsOptimizerGUI:
         
         # Estética
         ax.set_ylabel('USD', fontsize=11, fontweight='bold', color='#2c3e50')
-        ax.set_title('Costo Logístico Mensual: Actual vs. Optimizado', fontsize=12, fontweight='bold', pad=15, color='#2c3e50')
+        ax.set_title('Costo Logístico Mensual: Actual vs. Optimizado', fontsize=12, fontweight='bold', pad=12, color='#2c3e50')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.spines['left'].set_color('#bdc3c7')
@@ -248,10 +272,10 @@ class LogisticsOptimizerGUI:
         if self.costo_optimo is not None:
             ahorro = self.costo_actual - self.costo_optimo
             pct = (ahorro / self.costo_actual) * 100
-            ax.text(0.5, 0.95, f'Ahorro: ${ahorro:,.0f} ({pct:.1f}%)',
+            ax.text(0.5, 0.93, f'Ahorro: ${ahorro:,.0f} ({pct:.1f}%)',
                    transform=ax.transAxes, ha='center', va='top',
-                   fontsize=11, fontweight='bold', color='#27ae60',
-                   bbox=dict(boxstyle='round,pad=0.5', facecolor='#e8f8f0', edgecolor='#27ae60'))
+                   fontsize=10, fontweight='bold', color='#27ae60',
+                   bbox=dict(boxstyle='round,pad=0.4', facecolor='#e8f8f0', edgecolor='#27ae60'))
         
         plt.tight_layout()
         
