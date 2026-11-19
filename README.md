@@ -25,8 +25,7 @@ El modelo decide **qué centros abrir** y **cómo asignar la demanda** para mini
 | `optimizacion.py` | Script principal: modelo MIP, resolución con CBC, exportación de resultados |
 | `interfaz.py` | Interfaz gráfica (Tkinter) para ejecución visual y análisis de resultados |
 | `asignacion_logistica.csv` | Plan de asignación óptima (Centro → Zona, unidades) |
-| `documentacion_tecnica.md` | Sección 5.2 (Modelo Matemático) y Sección 13 (Resultados) |
-| `pitch_comercial.md` | Sección 12: Justificación comercial, público objetivo, modelo de negocio |
+| `documentacion_tecnica.md` | Secciones 1-5, 7-8, 13-15: Modelo completo, metodología, resultados, sensibilidad, conclusiones |
 
 ---
 
@@ -72,9 +71,10 @@ $$\min \sum_i C_i^{\text{fijo}} y_i + \sum_i \sum_j C_{ij}^{\text{transporte}} x
 - `pulp` (PuLP 2.9+ compatible)
 - `pandas`
 - `tkinter` (incluido en Python estándar)
+- `matplotlib`
 
 ```bash
-pip install pulp pandas
+pip install pulp pandas matplotlib
 ```
 
 ---
@@ -91,7 +91,7 @@ Genera `asignacion_logistica.csv` e imprime resultados en consola.
 ```bash
 python interfaz.py
 ```
-Ventana con botón de ejecución, panel de KPIs y tabla interactiva de asignaciones.
+Ventana con botón de ejecución, panel de KPIs, gráfico comparativo de costos y tabla interactiva de asignaciones.
 
 ---
 
