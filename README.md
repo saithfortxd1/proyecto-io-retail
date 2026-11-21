@@ -1,8 +1,8 @@
-# MIP Retail Optimizer - Optimización Logística de Centros de Distribución
+# MIP Retail Optimizer™ Enterprise - Optimización Logística de Centros de Distribución
 
 ## Descripción del Proyecto
 
-Este repositorio contiene una solución completa de optimización logística basada en **Programación Entera Mixta (MIP)** para el diseño de redes de centros de distribución en el sector retail. El modelo determina la configuración óptima de apertura de centros y asignación de flujos a zonas de demanda, minimizando el costo logístico total sujeto a restricciones operativas reales.
+**MIP Retail Optimizer™ Enterprise** es una solución de software comercial lista para producción, basada en **Programación Entera Mixta (MIP)**, para el diseño óptimo de redes de centros de distribución en el sector retail. El modelo determina la configuración óptima de apertura de centros y asignación de flujos a zonas de demanda, minimizando el costo logístico total sujeto a restricciones operativas reales.
 
 ---
 
@@ -23,23 +23,20 @@ El modelo decide **qué centros abrir** y **cómo asignar la demanda** para mini
 | Archivo | Descripción |
 |---------|-------------|
 | `optimizacion.py` | Motor matemático desacoplado: función `resolver_modelo(...)` reutilizable + ejecución CLI |
-| `interfaz.py` | Interfaz gráfica (Tkinter) con pantalla completa (`F11`/`Esc`), **modo protegido por defecto** con valores oficiales, **simulador interactivo desbloqueable** (pestañas editables, candado de solo lectura, botón restauración), KPIs, gráfico Matplotlib y tabla |
+| `interfaz.py` | **Interfaz gráfica Enterprise** (customtkinter) con pantalla completa, **modo protegido por defecto** con valores oficiales, **simulador interactivo desbloqueable** (pestañas editables, candado de solo lectura, botón restauración), **KPIs ejecutivos**, **gráficos duales**, **importación/exportación de escenarios (CSV/Excel)**, **reporte ejecutivo multi-hoja**, **modal ROI** y **modal Licencia** |
 | `asignacion_logistica.csv` | Plan de asignación óptima (Centro → Zona, unidades) |
 | `documentacion_tecnica.md` | Informe técnico completo (secciones 1-5, 7-8, 13-15, referencias APA, Anexo A) |
-| `pitch_comercial.md` | Solo en rama `feature/pitch-comercial`: modelo de negocio y propuesta de valor |
+| `pitch_comercial.md` | Modelo de negocio, justificación financiera, ROI y propuesta de valor |
+| `requirements.txt` | Dependencias Python para desarrollo |
+| `MIP_Retail_Optimizer.exe` | **Ejecutable standalone Windows** (ver sección Releases) |
 
 ---
 
 ## Arquitectura de Ramas (Git Workflow)
 
-Este repositorio mantiene una arquitectura simplificada con dos ramas:
-
 | Rama | Propósito | Estado |
 |------|-----------|--------|
-| **`main`** | **Aplicación completa lista para usar** — Incluye la versión base oficial ($182,500 USD / 24.90% ahorro) **y** el simulador interactivo desbloqueable. Al iniciar, la interfaz muestra los valores oficiales en **modo protegido (solo lectura)**. Un clic en **"🔓 Habilitar Edición"** + confirmación activa el simulador completo (pestañas editables, recálculo en vivo, botón **✅ Confirmar y Recalcular**, y **↩ Restaurar Valores Base** que vuelve al caso oficial). Recomendada para evaluación, auditoría, despliegue y análisis de sensibilidad. | 🟢 Oficial / Completa |
-| **`feature/pitch-comercial`** | **Documentación comercial aislada** — Archivo `pitch_comercial.md` con definición de producto, justificación financiera ($60,500 USD/mes ahorro), público objetivo y modelo de negocio (consultoría + licenciamiento). No afecta código técnico. | 🔵 Documental |
-
-> **Nota:** La rama `feature/simulacion-parametrizable` fue integrada a `main` y eliminada. La funcionalidad completa está disponible directamente en `main`.
+| **`main`** | **Producto comercial completo** — Incluye versión base oficial ($182,500 USD / 24.90% ahorro) **y** simulador interactivo desbloqueable. Al iniciar, la interfaz muestra los valores oficiales en **modo protegido (solo lectura)**. Un clic en **"🔓 Habilitar Edición"** + confirmación activa el simulador completo (pestañas editables, recálculo en vivo, botón **✅ Confirmar y Recalcular**, y **↩ Restaurar Valores Base** que vuelve al caso oficial). Incluye **KPIs ejecutivos**, **gráficos duales**, **importación/exportación de escenarios**, **reporte ejecutivo multi-hoja (.xlsx/.csv)**, **modal ROI/Licencia** y **ejecutable standalone Windows**. | 🟢 Oficial / Completa |
 
 ---
 
@@ -79,61 +76,120 @@ $$\min \sum_i C_i^{\text{fijo}} y_i + \sum_i \sum_j C_{ij}^{\text{transporte}} x
 
 ---
 
-## Requisitos
+## Características Comerciales (Enterprise)
 
-- Python 3.8+
-- `pulp` (PuLP 2.9+ compatible)
-- `pandas`
-- `tkinter` (incluido en Python estándar)
-- `matplotlib`
-
-```bash
-pip install pulp pandas matplotlib
-```
+| Capacidad | Descripción |
+|-----------|-------------|
+| **🔒 Modo Protegido por Defecto** | Arranca con valores oficiales bloqueados (`readonly`), etiqueta `🔒 Modo Protegido`. Evita modificaciones accidentales en demos en vivo. |
+| **🔓 Simulador Interactivo Desbloqueable** | Botón `🔓 Habilitar Edición` → confirmación → pestañas editables (Centros, Demandas, Configuración) → `✅ Confirmar y Recalcular` → recálculo instantáneo → **vuelve a modo protegido automáticamente**. |
+| **↩ Restauración Segura** | Botón `↩ Restaurar Valores Base` → confirmación → valores oficiales + recálculo automático + modo protegido. |
+| **📂 Importar Escenarios** | Carga parámetros desde archivos `.csv` o `.xlsx` con columnas `parametro` / `valor`. |
+| **📊 Exportar Reporte Ejecutivo** | Genera **Excel multi-hoja** (Resumen Ejecutivo, KPIs Detallados, Matriz de Asignación, Parámetros Escenario) y **CSV** listos para gerencia. |
+| **💼 Modal Licencia y ROI** | Botón `💼 Licencia y ROI` en header abre modal ejecutivo con propuesta de valor, ROI (>300%), payback (<3 meses), modelo de negocio 3 fases y beneficios clave. |
+| **📈 Dashboard Analítico Dual** | KPIs tarjetas (Total, Ahorro, Centros, Nivel Servicio) + 2 gráficos: (1) Baseline vs Optimizado, (2) Desglose Fijo/Variable + Utilización capacidad por centro. |
+| **🖥️ Ejecutable Standalone Windows** | `MIP_Retail_Optimizer.exe` compilado con PyInstaller (`--collect-all pulp --collect-all customtkinter`). **Sin dependencias de Python**. Incluye solver CBC embebido. Ideal para clientes, demos en vivo y distribución comercial. |
+| **🌐 Pantalla Completa Nativa** | `F11` alterna, `Esc` sale. Optimizado para presentaciones ejecutivas. |
 
 ---
 
-## Ejecución
+## Resultados Principales (Caso Base Oficial)
 
-### Línea de comandos (motor matemático)
+| Métrica | Valor |
+|---------|-------|
+| **Centros seleccionados** | L2, L3 |
+| **Costo Fijo Óptimo** | 88,000 USD |
+| **Costo Variable Óptimo** | 94,500 USD |
+| **Costo Total Óptimo** | **182,500 USD** |
+| **Costo Actual (Baseline)** | 243,000 USD |
+| **Ahorro Mensual** | **60,500 USD** |
+| **Reducción Porcentual** | **24.90%** |
+
+### Plan de Asignación Óptima
+| Centro | Zonas Asignadas | Volumen |
+|--------|-----------------|---------|
+| L2 | Z1, Z2, Z3 | 12,000 |
+| L3 | Z4, Z5, Z6 | 10,000 |
+
+---
+
+## Requisitos (Solo para Desarrollo)
+
+- Python 3.8+
+- `pip install -r requirements.txt`
+
+```bash
+pip install -r requirements.txt
+```
+
+**Nota:** Para uso comercial directo **no se requiere Python**. Descargue `MIP_Retail_Optimizer.exe` desde [Releases](https://github.com/saithfortxd1/proyecto-io-retail/releases) y ejecútelo directamente en Windows 10/11.
+
+---
+
+## Ejecución (Modo Desarrollo)
+
+### Motor matemático (CLI)
 ```bash
 python optimizacion.py
 ```
 Genera `asignacion_logistica.csv` e imprime resultados en consola (caso base oficial).
 
-### Interfaz gráfica completa (en `main`)
+### Interfaz Gráfica Enterprise (Modo Completo)
 ```bash
 python interfaz.py
 ```
-- **Al iniciar**: Ventana maximizada, **modo protegido** con valores oficiales ($182,500 USD / 24.90%), etiqueta `🔒 Modo Protegido (Valores Oficiales)`.
-- **Simulador interactivo**: Clic en **"🔓 Habilitar Edición"** → confirmación → pestañas editables (Centros, Demandas, Configuración) → **"✅ Confirmar y Recalcular en Tiempo Real"** → recálculo instantáneo → **vuelve a modo protegido** automáticamente.
-- **Restauración**: Botón **"↩ Restaurar Valores Base"** → confirmación → valores oficiales + recálculo automático + modo protegido.
+- **Al iniciar**: Ventana maximizada, **modo protegido** con valores oficiales ($182,500 USD / 24.90%), etiqueta `🔒 Modo Protegido`, botón `🔓 Habilitar Edición`.
+- **Simulador interactivo**: Clic en `🔓 Habilitar Edición` → confirmación → pestañas editables (Centros, Demandas, Configuración) → `✅ Confirmar y Recalcular` → recálculo instantáneo → **vuelve a modo protegido** automáticamente.
+- **Restauración**: Botón `↩ Restaurar Valores Base` → confirmación → valores oficiales + recálculo automático + modo protegido.
+- **Importar/Exportar**: `📂 Importar Escenario` (.csv/.xlsx) | `📊 Exportar Reporte Ejecutivo` (.xlsx/.csv).
+- **ROI/Licencia**: Botón `💼 Licencia y ROI` en header → modal ejecutivo con propuesta de valor, ROI >300%, payback <3 meses, modelo 3 fases.
 - **Pantalla completa**: `F11` alterna, `Esc` sale.
-- Panel KPIs, gráfico Matplotlib (Baseline vs Óptimo), tabla `Treeview` de asignación.
+- KPIs tarjetas, gráficos duales, tabla asignación, exportación reporte multi-hoja.
+
+---
+
+## Compilación del Ejecutable (Solo Desarrolladores)
+
+```bash
+pip install -r requirements.txt
+pyinstaller --noconfirm --onefile --windowed \
+  --name "MIP_Retail_Optimizer" \
+  --collect-all pulp \
+  --collect-all customtkinter \
+  interfaz.py
+```
+
+**Resultado:** `dist/MIP_Retail_Optimizer.exe` (standalone, incluye solver CBC embebido, ~150-200 MB).
+
+**Archivos generados ignorados por Git:**
+- `build/` - archivos temporales de compilación
+- `dist/` - ejecutable final
+- `*.spec` - archivo de especificación PyInstaller
 
 ---
 
 ## Solucionador
 
-Utiliza **CBC (Coin-or Branch and Cut)** vía PuLP. Tiempo de resolución típico: < 0.1 segundos. Optimalidad garantizada (gap = 0%).
+Utiliza **CBC (Coin-or Branch and Cut)** vía PuLP. Tiempo de resolución típico: < 0.1 segundos. Optimalidad garantizada (gap = 0%). El ejecutable incluye el solver CBC embebido (`pulp.solverdir`), funcionando **sin instalación externa**.
 
 ---
 
-## Aplicaciones
+## Aplicaciones Comerciales
 
 - **Network Design** para retail, e-commerce, distribución mayorista
 - **Análisis de escenarios** (crecimiento de demanda, variación de costos, nuevas ubicaciones)
 - **Due diligence** de inversiones en infraestructura logística
-- **Herramienta didáctica** para MIP aplicado a supply chain
+- **Herramienta didáctica ejecutiva** para MIP aplicado a supply chain
+- **Demo en vivo** para clientes: modo protegido → desbloquear → simular → restaurar
 
 ---
 
 ## Licencia
 
-Proyecto académico / demostrativo. Uso libre para fines educativos y de evaluación.
+Producto comercial / demostrativo. Licencia propietaria. Contactar para términos de uso comercial.
 
 ---
 
-## Autor
+## Autor y Contacto
 
 Desarrollado como parte de proyecto final de investigación en optimización logística.
+**MIP Retail Optimizer™ Enterprise** - Sistema de Optimización Logística y Diseño de Redes de Distribución.
