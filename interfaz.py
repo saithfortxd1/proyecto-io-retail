@@ -3,6 +3,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import pandas as pd
 import os
+import json
+import sys
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -13,6 +15,9 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 import threading
 import time
+from tkinter import simpledialog
+from dotenv import load_dotenv
+from google import genai
 
 # Importar el motor matemático
 from optimizacion import (
@@ -21,6 +26,87 @@ from optimizacion import (
     COSTOS_FIJOS_DEFAULT, CAPACIDADES_DEFAULT,
     MAX_CENTROS_DEFAULT, COSTOS_ENVIO_DEFAULT, COSTO_BASELINE_DEFAULT
 )
+
+APP_DIR = os.path.dirname(
+    sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
+)
+load_dotenv(os.path.join(APP_DIR, ".env"))
+
+GEMINI_MODEL = "gemini-2.5-flash"
+AI_SYSTEM_INSTRUCTION = """
+Eres el asistente de MIP Retail Optimizer, una herramienta de apoyo a decisiones
+logísticas. Responde en español, con claridad y rigor; distingue los resultados
+oficiales del informe de los escenarios dinámicos que el usuario comparta. No
+inventes datos, no afirmes que una recomendación reemplaza la validación del
+modelo PuLP/CBC y advierte si un escenario cambia la solución.
+
+CONTEXTO COMPLETO DEL INFORME TÉCNICO
+Objetivo: minimizar el costo mensual fijo de apertura más el costo variable de
+transporte para abastecer toda la demanda de seis zonas urbanas desde cuatro
+centros candidatos, sujetos a capacidades y a un máximo estratégico de centros.
+La operación empírica de referencia cuesta USD 243,000 al mes (USD 125,000
+fijos y USD 118,000 variables). El problema es un CFLP (Capacitated Facility
+Location Problem), formulado como Programación Entera Mixta lineal.
+
+Datos oficiales: centros L1, L2, L3 y L4; costos fijos respectivamente
+USD 45,000, 50,000, 38,000 y 42,000; capacidades 15,000, 20,000, 12,000 y
+16,000 unidades/mes. Zonas Z1–Z6 demandan 3,000, 4,000, 5,000, 3,500, 2,500
+y 4,000 unidades/mes (22,000 total). Costos unitarios de envío por zona
+(Z1–Z6): L1=[3,5,8,6,10,12], L2=[6,3,4,7,8,9],
+L3=[9,7,5,3,4,6], L4=[11,8,6,5,3,4] USD/unidad. La interfaz actual no
+permite editar tarifas de envío; indica esto si preguntan por ellas.
+
+Formulación: y_i binaria vale 1 si se abre centro i; x_ij >= 0 es el flujo
+desde centro i a zona j. Minimizar sum_i(f_i*y_i)+sum_i,sum_j(c_ij*x_ij),
+sujeto a sum_i(x_ij)=d_j para cada zona, sum_j(x_ij)<=K_i*y_i para cada
+centro, sum_i(y_i)<=P (P=2 en el caso base), además de los dominios de las
+variables. La demanda total supera la mayor capacidad individual, por lo que
+se necesitan al menos dos centros. PuLP formula el modelo y CBC lo resuelve
+con Branch-and-Bound (relajaciones y ramificación sobre binarias) con garantía
+de optimalidad global; el caso tiene 4 variables binarias, 24 continuas,
+6 restricciones de demanda, 4 de capacidad y 1 de límite de centros.
+
+Resultado oficial validado: abrir L2 y L3; L1 y L4 quedan cerrados. L2 atiende
+Z1–Z3, 12,000/20,000 unidades (60.0%); L3 atiende Z4–Z6,
+10,000/12,000 (83.3%). Costo fijo óptimo USD 88,000, transporte USD 94,500,
+total USD 182,500; ahorro USD 60,500/mes (24.90%) o USD 726,000/año. El
+ahorro frente al baseline reduce USD 37,000 fijos y USD 23,500 variables.
+La mejor alternativa siguiente es L2+L4 a USD 183,000, solo USD 500 más.
+La comprobación de las seis parejas dio: L2+L3 182,500; L2+L4 183,000;
+L1+L4 187,000; L1+L3 190,500; L3+L4 197,500; L1+L2 213,000 USD.
+
+Sensibilidad documentada: con fletes globales +10%, L2+L3 cuesta USD 191,950
+y ahorra 21.01%; con +15% y +20% conviene L2+L4 (USD 196,650 y 201,200).
+Un aumento de 10% solo en rutas desde L3 cambia a L2+L4. Si el fijo de L3
+supera USD 38,500, L4 gana; capacidad L3 de 9,000 también cambia a L2+L4.
+Con capacidad L3 de 15,000 se reporta L1+L3 por USD 181,500. La frontera de
+decisión L3/L4 es sensible porque la diferencia base es de USD 500. Los
+escenarios probados mantuvieron ahorros superiores al 17%; con máximo dos
+centros la capacidad combinada máxima es 36,000.
+
+Metodología y alcance: se eligió MIP frente al transporte/PL (no modela el
+costo fijo) y a enumerar manualmente (no escala). Se comprobó el resultado
+contra las seis parejas. El informe también describe un prototipo previo de
+pronóstico lineal con 12 meses simulados (22,206 unidades pronosticadas y
+2.75% de error retrospectivo en esa simulación); no son datos reales ni una
+función implementada en esta interfaz. No prometas precisión de pronóstico.
+Limitaciones/reglas: el modelo solo incluye costos fijos, tarifas y
+capacidades definidos; no modela contratos vigentes, costos de cierre/traslado,
+estacionalidad ni factores externos. Las decisiones deben revisarse con
+criterio gerencial y datos reales, especialmente L3 vs L4.
+
+MANUAL DEL SOFTWARE
+El Dashboard muestra escenario, parámetros, KPIs, comparativa de costos y
+utilización de capacidad. Los campos inician en modo protegido. Para simular,
+habilita edición, cambia costos fijos/capacidades/demandas/máximo de centros/
+baseline, confirma y ejecuta la optimización; Restaurar Base vuelve al caso
+oficial. La matriz presenta las asignaciones y permite exportar CSV/Excel.
+Los costos de envío permanecen en la matriz oficial y no tienen controles de
+edición en la versión actual. La navegación lateral abre Dashboard, Matriz,
+Manual, Licencia y este asistente. Este chat envía la pregunta junto con los
+valores visibles al momento de enviarla; se conecta a Gemini por internet y
+no impide usar el optimizador local si Gemini no está disponible.
+"""
 
 # ============================================================
 # PALETA DE COLOR LIGHT ENTERPRISE SAAS (Stripe/Linear Style)
@@ -89,9 +175,15 @@ class MIPRetailOptimizerApp:
         self.costo_actual = COSTO_BASELINE_DEFAULT
         self.costo_optimo = None
         self.ultimo_resultado = None
+        self.ultimo_parametros = None
         self.entry_vars = {}
         self.execution_step = 0
         self.is_executing = False
+        self.api_key_load_error = None
+        self.api_key = self._load_api_key()
+        self.chat_busy = False
+        self.chat_conversation = []
+        self.chart_canvases = []
         
         # Variables Entry
         self.setup_styles()
@@ -195,6 +287,7 @@ class MIPRetailOptimizerApp:
             ("dashboard", "📊  Dashboard y Simulación", "Vista principal de trabajo"),
             ("matrix", "📋  Matriz de Rutas y Reportes", "Tabla completa con exportación"),
             ("manual", "📖  Manual de Uso y Modelo", "Guía interactiva paso a paso"),
+            ("assistant", "🤖 Asistente IA (Gemini)", "Consulta resultados y escenarios"),
             ("license", "💼  Licencia y ROI Comercial", "Propuesta de valor y ROI >300%"),
         ]
         
@@ -245,6 +338,7 @@ class MIPRetailOptimizerApp:
         self.build_dashboard_view()
         self.build_matrix_view()
         self.build_manual_view()
+        self.build_assistant_view()
         self.build_license_view()
         
         # Mostrar vista inicial
@@ -300,6 +394,16 @@ class MIPRetailOptimizerApp:
             font=self.fonts["body"],
             text_color=COLORS["TEXT_SECONDARY"]
         ).pack(anchor="w", pady=(4, 0))
+
+        ctk.CTkButton(
+            header,
+            text="🤖 Consultar al Asistente IA",
+            font=self.fonts["button"],
+            height=40,
+            fg_color=COLORS["PRIMARY"],
+            hover_color=COLORS["PRIMARY_HOVER"],
+            command=lambda: self.switch_view("assistant")
+        ).pack(side="right", padx=4)
         
         # ===== TARJETA: ESCENARIO ACTUAL =====
         scenario_card = ctk.CTkFrame(
@@ -638,12 +742,12 @@ class MIPRetailOptimizerApp:
         # Inicialmente ocultar KPIs
         self.kpi_card.pack_forget()
         
-        # ===== GRÁFICOS (inicialmente ocultos) =====
+        # ===== GRÁFICOS =====
         self.charts_card = ctk.CTkFrame(main_scroll, fg_color="transparent")
-        self.charts_card.pack(fill="both", expand=True, pady=(0, 0))
+        self.charts_card.pack(fill="x", pady=(0, 0))
         self.charts_card.grid_columnconfigure(0, weight=1)
         self.charts_card.grid_columnconfigure(1, weight=1)
-        self.charts_card.grid_rowconfigure(0, weight=1)
+        self.charts_card.grid_rowconfigure(0, weight=1, minsize=360)
         
         # Gráfico 1
         self.chart1_frame = ctk.CTkFrame(
@@ -654,7 +758,9 @@ class MIPRetailOptimizerApp:
             border_color=COLORS["BORDER"]
         )
         self.chart1_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        self.chart1_frame.grid_rowconfigure(1, weight=1)
+        self.chart1_frame.configure(height=360)
+        self.chart1_frame.grid_propagate(False)
+        self.chart1_frame.grid_rowconfigure(1, weight=1, minsize=300)
         self.chart1_frame.grid_columnconfigure(0, weight=1)
         
         ctk.CTkLabel(
@@ -666,7 +772,7 @@ class MIPRetailOptimizerApp:
         
         self.chart1_canvas_frame = ctk.CTkFrame(self.chart1_frame, fg_color="transparent")
         self.chart1_canvas_frame.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
-        self.chart1_canvas_frame.grid_rowconfigure(0, weight=1)
+        self.chart1_canvas_frame.grid_rowconfigure(0, weight=1, minsize=280)
         self.chart1_canvas_frame.grid_columnconfigure(0, weight=1)
         
         # Gráfico 2
@@ -678,7 +784,9 @@ class MIPRetailOptimizerApp:
             border_color=COLORS["BORDER"]
         )
         self.chart2_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        self.chart2_frame.grid_rowconfigure(1, weight=1)
+        self.chart2_frame.configure(height=360)
+        self.chart2_frame.grid_propagate(False)
+        self.chart2_frame.grid_rowconfigure(1, weight=1, minsize=300)
         self.chart2_frame.grid_columnconfigure(0, weight=1)
         
         ctk.CTkLabel(
@@ -690,10 +798,8 @@ class MIPRetailOptimizerApp:
         
         self.chart2_canvas_frame = ctk.CTkFrame(self.chart2_frame, fg_color="transparent")
         self.chart2_canvas_frame.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
-        self.chart2_canvas_frame.grid_rowconfigure(0, weight=1)
+        self.chart2_canvas_frame.grid_rowconfigure(0, weight=1, minsize=280)
         self.chart2_canvas_frame.grid_columnconfigure(0, weight=1)
-        
-        self.charts_card.pack_forget()
         
     # ========================================================
     # VISTA 2: MATRIZ DE RUTAS Y REPORTES
@@ -837,7 +943,8 @@ class MIPRetailOptimizerApp:
              "3. **Importar**: '📂 Cargar CSV/Excel' carga escenarios guardados.\n"
              "4. **Ejecutar': Click en '▶ Ejecutar Optimización Matemática' → ver progreso animado.\n"
              "5. **Exportar': En 'Matriz de Rutas' → 'Exportar a Excel' (multi-hoja) o CSV.\n"
-             "6. **Navegación': Sidebar izquierdo cambia entre Dashboard, Matriz, Manual y Licencia."),
+             "6. **Asistente IA**: abre 🤖 Asistente IA (Gemini); la consulta requiere internet y una API Key.\n"
+             "7. **Navegación**: Sidebar izquierdo cambia entre Dashboard, Matriz, Manual, Asistente IA y Licencia."),
         ]
         
         for title, content in manual_sections:
@@ -852,9 +959,329 @@ class MIPRetailOptimizerApp:
             ctk.CTkLabel(card, text=content, font=self.fonts["body"],
                         text_color=COLORS["TEXT_SECONDARY"], justify="left",
                         wraplength=1100).pack(anchor="w", padx=24, pady=(0, 20))
+
+    # ========================================================
+    # VISTA 4: ASISTENTE IA
+    # ========================================================
+    def build_assistant_view(self):
+        frame = self.views["assistant"]
+        frame.grid_rowconfigure(1, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=28, pady=(24, 12))
+        header.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            header,
+            text="🤖 Asistente IA (Gemini)",
+            font=self.fonts["title"],
+            text_color=COLORS["TEXT_PRIMARY"]
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            header,
+            text="Respuestas basadas en el informe y en el escenario visible actualmente",
+            font=self.fonts["body"],
+            text_color=COLORS["TEXT_SECONDARY"]
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        ctk.CTkButton(
+            header,
+            text="🔑 Configurar API Key",
+            font=self.fonts["button_small"],
+            height=36,
+            fg_color="#F1F5F9",
+            hover_color="#E2E8F0",
+            text_color=COLORS["TEXT_SECONDARY"],
+            command=self.configurar_api_key
+        ).grid(row=0, column=1, rowspan=2, sticky="e", padx=4)
+
+        card = ctk.CTkFrame(
+            frame,
+            fg_color=COLORS["BG_CARD"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["BORDER"]
+        )
+        card.grid(row=1, column=0, sticky="nsew", padx=28, pady=(0, 28))
+        card.grid_rowconfigure(1, weight=1)
+        card.grid_columnconfigure(0, weight=1)
+
+        self.chat_status = ctk.CTkLabel(
+            card,
+            text="",
+            font=self.fonts["body_small"],
+            text_color=COLORS["TEXT_SECONDARY"],
+            anchor="w"
+        )
+        self.chat_status.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 8))
+
+        self.chat_history = ctk.CTkTextbox(
+            card,
+            font=self.fonts["body"],
+            fg_color="#F8FAFC",
+            text_color=COLORS["TEXT_PRIMARY"],
+            wrap="word",
+            corner_radius=8
+        )
+        self.chat_history.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 12))
+        self.chat_history.configure(state="disabled")
+
+        quick_frame = ctk.CTkFrame(card, fg_color="transparent")
+        quick_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 12))
+        quick_questions = [
+            "¿Por qué el modelo eligió L2 y L3?",
+            "Explícame el ahorro del 24.90%",
+            "¿Cómo simulo un aumento de demanda?",
+            "Resume el modelo matemático MIP",
+        ]
+        for index, question in enumerate(quick_questions):
+            ctk.CTkButton(
+                quick_frame,
+                text=question,
+                font=self.fonts["button_small"],
+                height=36,
+                fg_color="#EFF6FF",
+                hover_color="#DBEAFE",
+                text_color=COLORS["PRIMARY"],
+                command=lambda q=question: self.enviar_mensaje_asistente(q)
+            ).grid(row=index // 2, column=index % 2, sticky="ew", padx=4, pady=4)
+        quick_frame.grid_columnconfigure((0, 1), weight=1)
+
+        input_frame = ctk.CTkFrame(card, fg_color="transparent")
+        input_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 20))
+        input_frame.grid_columnconfigure(0, weight=1)
+        self.chat_input = ctk.CTkEntry(
+            input_frame,
+            height=44,
+            font=self.fonts["body"],
+            placeholder_text="Escribe una pregunta sobre resultados o uso del software…"
+        )
+        self.chat_input.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.chat_input.bind("<Return>", lambda _event: self.enviar_mensaje_asistente())
+        self.chat_send_button = ctk.CTkButton(
+            input_frame,
+            text="Enviar",
+            width=100,
+            height=44,
+            font=self.fonts["button"],
+            command=self.enviar_mensaje_asistente
+        )
+        self.chat_send_button.grid(row=0, column=1)
+
+        self.chat_status.configure(
+            text=(
+                f"Clave detectada en {self.api_key_source}."
+                if self.api_key
+                else "Configura una API Key para consultar Gemini; la optimización local funciona sin internet."
+            )
+        )
+        if self.api_key_load_error:
+            self._append_chat(f"Aviso de configuración: {self.api_key_load_error}")
+        self._append_chat(
+            "Asistente: Hola. Puedo explicar el modelo, comparar el escenario actual "
+            "y guiarte por las pestañas. Al enviar una pregunta adjunto los parámetros "
+            "visibles y el último resultado calculado."
+        )
+
+    def _load_api_key(self):
+        environment_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if environment_key:
+            self.api_key_source = "GEMINI_API_KEY/.env"
+            return environment_key
+
+        config_path = os.path.join(APP_DIR, "config_ia.json")
+        if not os.path.exists(config_path):
+            self.api_key_source = None
+            return None
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as config_file:
+                config = json.load(config_file)
+        except (OSError, json.JSONDecodeError) as error:
+            self.api_key_load_error = f"No se pudo leer config_ia.json: {error}"
+            self.api_key_source = None
+            return None
+
+        if not isinstance(config, dict):
+            self.api_key_load_error = "config_ia.json debe contener un objeto JSON."
+            self.api_key_source = None
+            return None
+
+        local_key = config.get("GEMINI_API_KEY", "")
+        if isinstance(local_key, str) and local_key.strip():
+            self.api_key_source = "config_ia.json"
+            return local_key.strip()
+
+        self.api_key_source = None
+        return None
+
+    def configurar_api_key(self):
+        if os.getenv("GEMINI_API_KEY", "").strip():
+            messagebox.showinfo(
+                "API Key configurada",
+                "Se está usando GEMINI_API_KEY del entorno o archivo .env. "
+                "Elimínala de allí si deseas configurar una clave local."
+            )
+            return
+
+        api_key = simpledialog.askstring(
+            "Configurar API Key de Gemini",
+            "Pega tu clave de Gemini. Se guardará en texto local junto a la aplicación.",
+            parent=self.root,
+            show="*"
+        )
+        if api_key is None or not api_key.strip():
+            return
+
+        config_path = os.path.join(APP_DIR, "config_ia.json")
+        try:
+            with open(config_path, "w", encoding="utf-8") as config_file:
+                json.dump({"GEMINI_API_KEY": api_key.strip()}, config_file, indent=2)
+        except OSError as error:
+            messagebox.showerror("Error al guardar", f"No se pudo guardar la clave local:\n{error}")
+            return
+
+        self.api_key = api_key.strip()
+        self.api_key_source = "config_ia.json"
+        self.chat_status.configure(text="Clave configurada y guardada localmente.")
+        self._append_chat("Sistema: API Key guardada en config_ia.json (archivo local ignorado por Git).")
+
+    def _append_chat(self, message):
+        self.chat_history.configure(state="normal")
+        self.chat_history.insert("end", f"{message}\n\n")
+        self.chat_history.see("end")
+        self.chat_history.configure(state="disabled")
+
+    def _assistant_context(self):
+        try:
+            costos_fijos, capacidades, demandas, max_centros, baseline = self.leer_parametros_ui()
+            parameter_state = {
+                "costos_fijos_usd_mes": dict(zip(UBICACIONES_DEFAULT, costos_fijos)),
+                "capacidades_unidades_mes": dict(zip(UBICACIONES_DEFAULT, capacidades)),
+                "demandas_unidades_mes": dict(zip(ZONAS_DEFAULT, demandas)),
+                "max_centros": max_centros,
+                "baseline_usd_mes": baseline,
+                "total_demanda_unidades_mes": sum(demandas),
+            }
+        except ValueError as error:
+            parameter_state = {
+                "valores_visibles_sin_validar": {
+                    key: entry.get() for key, entry in self.entry_vars.items()
+                },
+                "error_validacion": str(error),
+            }
+
+        result = self.ultimo_resultado
+        if result:
+            result_state = {
+                "estado": result.get("estado"),
+                "centros_abiertos_ultimo_calculo": result.get("centros_abiertos", []),
+                "costo_fijo_usd_mes": result.get("costo_fijo"),
+                "costo_transporte_usd_mes": result.get("costo_variable"),
+                "costo_total_usd_mes": result.get("costo_total"),
+                "ahorro_usd_mes": result.get("ahorro"),
+                "ahorro_porcentaje": result.get("porcentaje_ahorro"),
+                "asignaciones": result.get("asignaciones", []),
+            }
+        else:
+            result_state = "Todavía no hay un resultado calculado."
+
+        return (
+            "ESTADO DINÁMICO CAPTURADO AL ENVIAR ESTA PREGUNTA "
+            "(los parámetros pueden ser distintos de los del informe):\n"
+            f"Parámetros visibles: {json.dumps(parameter_state, ensure_ascii=False)}\n"
+            f"Último resultado calculado: {json.dumps(result_state, ensure_ascii=False)}\n"
+            "Tarifas de envío visibles: matriz oficial fija "
+            f"{json.dumps(COSTOS_ENVIO_DEFAULT, ensure_ascii=False)}; la pantalla no tiene "
+            "campos editables para tarifas. Si los parámetros visibles fueron modificados "
+            "después del último cálculo, indícalo y no presentes el resultado anterior "
+            "como si correspondiera a esos parámetros."
+        )
+
+    def enviar_mensaje_asistente(self, prompt=None):
+        if self.chat_busy:
+            return
+
+        question = prompt or self.chat_input.get().strip()
+        if not question:
+            return
+        if not self.api_key:
+            self._append_chat("Tú: " + question)
+            self._append_chat(
+                "Asistente: Para usar Gemini, pulsa «Configurar API Key». "
+                "El modelo de optimización y las demás vistas funcionan sin conexión."
+            )
+            return
+
+        if prompt is None:
+            self.chat_input.delete(0, "end")
+        self._append_chat("Tú: " + question)
+        context = self._assistant_context()
+        self.chat_busy = True
+        self.chat_send_button.configure(state="disabled", text="Consultando…")
+        self.chat_status.configure(text="Gemini está preparando una respuesta…")
+        threading.Thread(
+            target=self._request_gemini,
+            args=(question, context, self.api_key, list(self.chat_conversation[-12:])),
+            daemon=True
+        ).start()
+
+    def _request_gemini(self, question, context, api_key, prior_turns):
+        try:
+            client = genai.Client(api_key=api_key)
+            contents = [
+                genai.types.Content(
+                    role=turn["role"],
+                    parts=[genai.types.Part(text=turn["text"])]
+                )
+                for turn in prior_turns
+            ]
+            contents.append(
+                genai.types.Content(
+                    role="user",
+                    parts=[genai.types.Part(text=f"{question}\n\n{context}")]
+                )
+            )
+            try:
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=contents,
+                    config=genai.types.GenerateContentConfig(
+                        system_instruction=AI_SYSTEM_INSTRUCTION
+                    )
+                )
+                answer = response.text
+            finally:
+                client.close()
+            if not answer:
+                raise RuntimeError("Gemini devolvió una respuesta vacía.")
+            self.root.after(0, self._finish_gemini_request, answer, None, question)
+        except Exception as error:
+            message = str(error).replace(api_key, "[clave oculta]")
+            self.root.after(0, self._finish_gemini_request, None, message, question)
+
+    def _finish_gemini_request(self, answer, error, question):
+        self.chat_busy = False
+        self.chat_send_button.configure(state="normal", text="Enviar")
+        if error:
+            self.chat_status.configure(text="No se pudo completar la consulta.")
+            self._append_chat(
+                "Asistente: No fue posible consultar Gemini. Comprueba la conexión "
+                f"y la API Key. Detalle: {error}"
+            )
+            return
+
+        self.chat_conversation.extend([
+            {"role": "user", "text": question},
+            {"role": "model", "text": answer},
+        ])
+        self.chat_conversation = self.chat_conversation[-12:]
+        self.chat_status.configure(text=f"Respuesta recibida de {GEMINI_MODEL}.")
+        self._append_chat("Asistente: " + answer)
         
     # ========================================================
-    # VISTA 4: LICENCIA Y ROI COMERCIAL
+    # VISTA 5: LICENCIA Y ROI COMERCIAL
     # ========================================================
     def build_license_view(self):
         frame = self.views["license"]
@@ -1066,10 +1493,6 @@ class MIPRetailOptimizerApp:
         self.execution_log.see("end")
         self.execution_log.configure(state="disabled")
         
-        # Ocultar KPIs y gráficos previos
-        self.kpi_card.pack_forget()
-        self.charts_card.pack_forget()
-        
         self.execution_step = 0
         self.execution_params = params
         self.execution_baseline = params[4]
@@ -1159,13 +1582,30 @@ class MIPRetailOptimizerApp:
     
     def actualizar_kpis_y_resultados(self, resultado):
         """Actualiza KPIs, gráficos y tabla"""
+        costos_fijos, capacidades, demandas, max_centros, baseline = self.leer_parametros_ui()
+        self.ultimo_parametros = {
+            "costos_fijos": costos_fijos,
+            "capacidades": capacidades,
+            "demandas": demandas,
+            "max_centros": max_centros,
+            "baseline": baseline,
+        }
+        self.costo_actual = baseline
+        self.costo_optimo = resultado["costo_total"]
+
         # KPIs
         self.kpi_widgets["💰 Costo Total Óptimo"].configure(text=f"${resultado['costo_total']:,.0f}")
         self.kpi_widgets["💵 Ahorro Mensual"].configure(text=f"${resultado['ahorro']:,.0f} / {resultado['porcentaje_ahorro']:.2f}%")
-        self.kpi_widgets["🏢 Centros Activos"].configure(text=f"{', '.join(resultado['centros_abiertos'])} ({len(resultado['centros_abiertos'])}/2)")
+        self.kpi_widgets["🏢 Centros Activos"].configure(
+            text=f"{', '.join(resultado['centros_abiertos'])} "
+                 f"({len(resultado['centros_abiertos'])}/{max_centros})"
+        )
+        self.kpi_widgets["✅ Demanda Cubierta"].configure(
+            text=f"{sum(demandas):,} unidades (100%)"
+        )
         
         self.kpi_card.pack(fill="x", pady=(0, 16))
-        self.charts_card.pack(fill="both", expand=True, pady=(0, 0))
+        self.charts_card.pack(fill="x", pady=(0, 0))
         
         self.crear_graficos()
         self.load_csv_data_from_result(resultado['asignaciones'])
@@ -1176,26 +1616,31 @@ class MIPRetailOptimizerApp:
         df.to_csv('asignacion_logistica.csv', index=False)
     
     def load_csv_data(self):
-        csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "asignacion_logistica.csv")
-        try:
-            if os.path.exists(csv_path):
-                df = pd.read_csv(csv_path)
-                self.load_csv_data_from_result(df.to_dict('records'))
-            else:
-                self.run_optimization_silencioso()
-        except:
-            self.run_optimization_silencioso()
+        self.run_optimization_silencioso()
     
     def run_optimization_silencioso(self):
         try:
-            r = resolver_modelo()
-            if r['estado'] == 'Optimal':
-                self.ultimo_resultado = r
-                self.costo_optimo = r['costo_total']
-                self.costo_actual = COSTO_BASELINE_DEFAULT
-                self.actualizar_kpis_y_resultados(r)
-        except:
-            pass
+            costos_fijos, capacidades, demandas, max_centros, baseline = self.leer_parametros_ui()
+            resultado = resolver_modelo(
+                costos_fijos=costos_fijos,
+                capacidades=capacidades,
+                demandas=demandas,
+                costos_envio=COSTOS_ENVIO_DEFAULT,
+                max_centros=max_centros,
+                zonas=ZONAS_DEFAULT,
+                ubicaciones=UBICACIONES_DEFAULT,
+                costo_baseline=baseline
+            )
+            if resultado["estado"] != "Optimal":
+                raise ValueError(
+                    f"{resultado['estado']}: {resultado.get('mensaje', 'No se encontró solución óptima.')}"
+                )
+            self.ultimo_resultado = resultado
+            self.actualizar_kpis_y_resultados(resultado)
+        except (ValueError, KeyError) as error:
+            messagebox.showerror("No se pudo calcular el escenario", str(error))
+        except Exception as error:
+            messagebox.showerror("Error del optimizador", str(error))
     
     def load_csv_data_from_result(self, asignaciones):
         for item in self.tree_matrix.get_children():
@@ -1212,13 +1657,14 @@ class MIPRetailOptimizerApp:
         for item in self.tree_matrix.get_children():
             self.tree_matrix.delete(item)
         
+        demands = self.ultimo_parametros["demandas"]
         total_var = 0
         for a in asignaciones:
             i = UBICACIONES_DEFAULT.index(a['Ubicacion'])
             j = ZONAS_DEFAULT.index(a['Zona'])
             costo_u = COSTOS_ENVIO_DEFAULT[i][j]
             costo_r = a['Cantidad_Enviada'] * costo_u
-            pct = (a['Cantidad_Enviada'] / DEMANDA_DEFAULT[j]) * 100
+            pct = (a['Cantidad_Enviada'] / demands[j] * 100) if demands[j] else 0
             total_var += costo_r
             
             self.tree_matrix.insert("", "end", values=(
@@ -1229,24 +1675,23 @@ class MIPRetailOptimizerApp:
                 f"{pct:.1f}%"
             ))
         
-        self.total_label.configure(text=f"TOTAL GENERAL: 22,000 unidades | ${total_var:,.0f} USD costo variable")
+        self.total_label.configure(
+            text=f"TOTAL GENERAL: {sum(demands):,} unidades | ${total_var:,.0f} USD costo variable"
+        )
     
     def crear_graficos(self):
-        # Limpiar
-        for w in self.chart1_canvas_frame.winfo_children(): w.destroy()
-        for w in self.chart2_canvas_frame.winfo_children(): w.destroy()
+        for chart_canvas in self.chart_canvases:
+            plt.close(chart_canvas.figure)
+        self.chart_canvases.clear()
+        for widget in self.chart1_canvas_frame.winfo_children():
+            widget.destroy()
+        for widget in self.chart2_canvas_frame.winfo_children():
+            widget.destroy()
         
         if not self.ultimo_resultado:
             return
         
-        BG = COLORS["CHART_BG"]
-        GRID = COLORS["CHART_GRID"]
         TEXT = COLORS["CHART_TEXT"]
-        TEXT2 = COLORS["CHART_TEXT_SECONDARY"]
-        RED = COLORS["CHART_BAR_BASELINE"]
-        GREEN = COLORS["CHART_BAR_OPTIMAL"]
-        BLUE = COLORS["CHART_BAR_CAPACITY"]
-        
         plt.style.use('default')
         
         # ---- GRÁFICO 1: Comparativa Baseline vs Óptimo ----
@@ -1289,33 +1734,34 @@ class MIPRetailOptimizerApp:
         plt.tight_layout(pad=2.0)
         
         canvas1 = FigureCanvasTkAgg(fig1, master=self.chart1_canvas_frame)
-        canvas1.draw()
         canvas1.get_tk_widget().pack(fill="both", expand=True)
+        canvas1.draw()
+        canvas1.get_tk_widget().update_idletasks()
+        self.chart_canvases.append(canvas1)
         
         # ---- GRÁFICO 2: Utilización de Capacidad ----
         fig2, ax2 = plt.subplots(figsize=(6.5, 4.2), dpi=100)
         fig2.patch.set_facecolor(COLORS["CHART_BG"])
         ax2.set_facecolor(COLORS["CHART_BG"])
-        
+
         centros_labels = []
         util_vals = []
-        cap_vals = []
         vol_vals = []
-        
-        for c in UBICACIONES_DEFAULT:
-            idx = UBICACIONES_DEFAULT.index(c)
-            cap = CAPACIDADES_DEFAULT[idx]
-            if c in self.ultimo_resultado['centros_abiertos']:
-                vol = sum(a['Cantidad_Enviada'] for a in self.ultimo_resultado['asignaciones'] if a['Ubicacion'] == c)
-            else:
-                vol = 0
+        capacidades = self.ultimo_parametros["capacidades"]
+        for idx, c in enumerate(UBICACIONES_DEFAULT):
+            cap = capacidades[idx]
+            vol = sum(
+                a['Cantidad_Enviada']
+                for a in self.ultimo_resultado['asignaciones']
+                if a['Ubicacion'] == c
+            )
             util = (vol / cap * 100) if cap > 0 else 0
             
-            centros_labels.append(c)
+            centro_estado = "abierto" if c in self.ultimo_resultado['centros_abiertos'] else "cerrado"
+            centros_labels.append(f"{c} ({centro_estado})  {vol:,.0f}/{cap:,.0f} u")
             util_vals.append(util)
-            cap_vals.append(cap)
             vol_vals.append(vol)
-        
+
         y_pos = range(len(centros_labels))
         colors_bar = []
         for u in util_vals:
@@ -1330,9 +1776,8 @@ class MIPRetailOptimizerApp:
         
         bars = ax2.barh(y_pos, util_vals, color=colors_bar, edgecolor='white', height=0.65)
         ax2.set_yticks(y_pos)
-        ax2.set_yticklabels([f"{c}  ({v:,.0f}/{c_cap:,.0f} u)" for c, v, c_cap in zip(centros_labels, vol_vals, cap_vals)],
-                           fontsize=11, color=COLORS["CHART_TEXT"])
-        ax2.set_xlim(0, 105)
+        ax2.set_yticklabels(centros_labels, fontsize=10, color=COLORS["CHART_TEXT"])
+        ax2.set_xlim(0, 118)
         ax2.set_xlabel('Utilización de Capacidad (%)', fontsize=11, fontweight='bold', color=COLORS["CHART_TEXT"])
         ax2.set_title('Utilización de Capacidad por Centro de Distribución',
                      fontsize=14, fontweight='bold', pad=18, color=COLORS["CHART_TEXT"])
@@ -1344,19 +1789,29 @@ class MIPRetailOptimizerApp:
         ax2.tick_params(axis='y', colors=COLORS["CHART_TEXT"], labelsize=10)
         ax2.grid(axis='x', alpha=0.2, color=COLORS["BORDER"])
         
-        for bar, val in zip(bars, util_vals):
-            if val > 0:
-                ax2.annotate(f'{val:.1f}%',
-                           xy=(bar.get_width(), bar.get_y() + bar.get_height()/2),
-                           xytext=(8, 0), textcoords="offset points",
-                           ha='left', va='center',
-                           fontweight='bold', fontsize=11, color='white')
+        for bar, val, centro in zip(bars, util_vals, UBICACIONES_DEFAULT):
+            etiqueta = f"{val:.1f}%"
+            if centro not in self.ultimo_resultado['centros_abiertos']:
+                etiqueta += " · Cerrado"
+            ax2.annotate(
+                etiqueta,
+                xy=(bar.get_width(), bar.get_y() + bar.get_height() / 2),
+                xytext=(6, 0),
+                textcoords="offset points",
+                ha='left',
+                va='center',
+                fontweight='bold',
+                fontsize=10,
+                color=COLORS["CHART_TEXT"]
+            )
         
         plt.tight_layout(pad=2.0)
         
         canvas2 = FigureCanvasTkAgg(fig2, master=self.chart2_canvas_frame)
-        canvas2.draw()
         canvas2.get_tk_widget().pack(fill="both", expand=True)
+        canvas2.draw()
+        canvas2.get_tk_widget().update_idletasks()
+        self.chart_canvases.append(canvas2)
     
     def exportar_excel_matriz(self):
         if not self.ultimo_resultado:
@@ -1391,12 +1846,13 @@ class MIPRetailOptimizerApp:
         try:
             r = self.ultimo_resultado
             rows = []
+            demands = self.ultimo_parametros["demandas"]
             for a in r['asignaciones']:
                 i = UBICACIONES_DEFAULT.index(a['Ubicacion'])
                 j = ZONAS_DEFAULT.index(a['Zona'])
                 costo_u = COSTOS_ENVIO_DEFAULT[i][j]
                 costo_r = a['Cantidad_Enviada'] * costo_u
-                pct = (a['Cantidad_Enviada'] / DEMANDA_DEFAULT[j]) * 100
+                pct = (a['Cantidad_Enviada'] / demands[j] * 100) if demands[j] else 0
                 rows.append([a['Ubicacion'], a['Zona'], a['Cantidad_Enviada'],
                             costo_u, costo_r, pct])
             

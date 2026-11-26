@@ -96,6 +96,7 @@ celerybeat.pid
 
 # Environments
 .env
+config_ia.json
 .venv
 env/
 venv/

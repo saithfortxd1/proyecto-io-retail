@@ -236,15 +236,9 @@ def resolver_modelo(
 
 ## 6.2 Capa de Presentación — `interfaz.py`
 
-La interfaz gráfica (Tkinter + Matplotlib) consume exclusivamente la función `resolver_modelo(...)`:
+La interfaz gráfica (customtkinter/Tkinter + Matplotlib) consume `resolver_modelo(...)`. El Dashboard inicia con los parámetros oficiales protegidos, calcula el caso base y dibuja las gráficas de costos y utilización desde el arranque. Los escenarios editables se validan y, tras la ejecución, actualizan KPIs, gráficas y matriz. La capacidad de cada centro y la demanda mostradas en resultados se toman del escenario calculado; la matriz de tarifas de envío permanece fija en esta versión.
 
-- **Rama `main`**: Parámetros fijos hardcodeados → llamada sin argumentos → resultado determinístico ($182,500 USD / 24.90%)
-- **Rama `feature/simulacion-parametrizable`**: Parámetros editables en pestañas (`ttk.Notebook`) → lectura de `ttk.Entry` → validación → llamada con argumentos personalizados → actualización en vivo de KPIs, gráfico y tabla
-
-Esta separación permite:
-- **Análisis de sensibilidad dinámico**: El usuario modifica costos fijos, capacidades, demandas o límite de CDs y ve el impacto inmediato sin reiniciar la aplicación
-- **Restauración instantánea**: Botón "Restaurar Valores Base" recarga los parámetros oficiales del caso de estudio
-- **Auditoría**: Cambiar a `main` garantiza reproducibilidad exacta del resultado oficial
+La aplicación ofrece navegación a Dashboard, Matriz, Manual, Asistente IA y Licencia. El modo protegido y la restauración de valores oficiales preservan la reproducibilidad del caso base.
 
 ## 6.3 Flujo de Datos
 
@@ -265,6 +259,24 @@ Esta separación permite:
 ```
 
 ---
+
+## 6.4 Asistente IA integrado
+
+El módulo de conversación usa `google-genai` para consultar Gemini y `python-dotenv` para cargar la variable `GEMINI_API_KEY`. La clave se obtiene, en este orden, del entorno/archivo `.env` junto al programa o de `config_ia.json`, que puede crearse desde el botón **🔑 Configurar API Key**. En el ejecutable PyInstaller, ambos archivos locales se buscan junto al `.exe`. `.env` y `config_ia.json` se excluyen del control de versiones; `.env.example` solo contiene un marcador de posición.
+
+Cada pregunta se acompaña con una instantánea del estado visible: costos fijos, capacidades, demandas, número máximo de centros, baseline, último resultado calculado, asignaciones y tarifas vigentes. La matriz de tarifas no es editable en esta interfaz y esa limitación se comunica al modelo. El prompt de sistema incluye objetivos y restricciones del MIP, cifras oficiales, validación de las seis parejas, escenarios de sensibilidad, límites del estudio y guía de uso. Se distingue el último resultado calculado de parámetros editados después del cálculo para evitar interpretaciones engañosas.
+
+La solicitud de red se ejecuta en `threading.Thread`; el resultado o error vuelve al hilo principal de Tk mediante `after()`. Sin API Key o sin internet, la interfaz y el solver local siguen disponibles y el error de Gemini se muestra en el chat. La IA explica, no sustituye la resolución ni la validación del modelo matemático.
+
+## 6.5 Configuración y empaquetado
+
+Instala las dependencias con `pip install -r requirements.txt`. Para desarrollo, configura `.env` a partir de `.env.example`; para distribución, el usuario puede guardar su clave local desde la interfaz, sin incluirla en el ejecutable. Compila en Windows con:
+
+```powershell
+pyinstaller --noconfirm --onefile --windowed --name "MIP_Retail_Optimizer" --collect-all pulp --collect-all customtkinter --collect-all google.genai interfaz.py
+```
+
+El ejecutable requiere internet únicamente para las consultas de Gemini; la optimización PuLP/CBC funciona sin conexión.
 
 # 13 Resultados Obtenidos
 
@@ -351,12 +363,18 @@ La integración de IA generativa redujo el ciclo de desarrollo de **formulación
 
 # 7 Integración con Inteligencia Artificial
 
-El desarrollo de este proyecto se apoyó extensivamente en **Inteligencia Artificial Generativa** como asistente de desarrollo, acelerando la transición desde la formulación matemática hasta la implementación computacional completa. Los roles específicos incluyen:
+Además del prototipo de pronóstico documentado en el informe original, la aplicación ahora integra un **Asistente IA conversacional con Gemini** mediante el SDK `google-genai`. El prototipo de pronóstico usó datos simulados y no forma parte del cálculo actual de la interfaz; no debe interpretarse como una predicción validada con datos reales.
+
+El asistente de escritorio explica el modelo MIP, ayuda a interpretar los centros seleccionados y guía el uso de las vistas. Su `system_instruction` reúne el problema, parámetros oficiales, formulación, resultados, comprobación de las seis parejas, sensibilidad y manual del programa. Cada envío agrega silenciosamente los valores presentes en pantalla y el último resultado del solver, incluidos costos, demandas, capacidades, baseline, centros y asignaciones. Si el usuario edita parámetros después de resolver, se explicita que el resultado anterior puede estar desactualizado. Las tarifas se incluyen como matriz fija, pues no se editan en la interfaz.
+
+La API Key puede leerse de `GEMINI_API_KEY` en el entorno o en `.env`; en ausencia de esa configuración se puede guardar desde el botón **🔑 Configurar API Key** en un archivo local `config_ia.json`, junto al script o al `.exe`. Ninguno de esos archivos con secretos se sube a Git. Las llamadas corren en un hilo de trabajo y sus respuestas se presentan en Tkinter usando `after()`, evitando bloquear la interfaz. Si no hay internet o clave, la optimización local permanece disponible.
+
+Durante el desarrollo también se usó IA generativa como herramienta de apoyo en:
 
 **Asistente de Programación y Sintaxis:**
 - Estructuración de la sintaxis en Python para el modelo MIP usando PuLP, incluyendo la declaración correcta de variables de decisión (`LpVariable.dicts`), construcción de la función objetivo con `lpSum`, y codificación de restricciones lineales.
 - Implementación de la interfaz gráfica con Tkinter: diseño de layouts con `grid`/`pack`, integración de `ttk.Treeview` para tablas de datos, y embebido de gráficos `matplotlib` mediante `FigureCanvasTkAgg`.
-- Manejo de subprocess para desacoplar la ejecución del solucionador de la GUI principal, parsing de salida stdout para actualización dinámica de KPIs.
+- Integración de `FigureCanvasTkAgg` para actualizar las gráficas junto con KPIs y resultados.
 
 **Gestión de Control de Versiones:**
 - Generación de comandos Git secuenciales: inicialización del repositorio (`git init`), staging selectivo (`git add`), commits semánticos con mensajes descriptivos, renombrado de rama principal (`git branch -M main`), vinculación a remoto (`git remote add origin`) y push (`git push -u origin main`).

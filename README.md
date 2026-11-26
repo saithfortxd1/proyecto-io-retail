@@ -23,7 +23,7 @@ El modelo decide **qué centros abrir** y **cómo asignar la demanda** para mini
 | Archivo | Descripción |
 |---------|-------------|
 | `optimizacion.py` | Motor matemático desacoplado: función `resolver_modelo(...)` reutilizable + ejecución CLI |
-| `interfaz.py` | **Interfaz gráfica Enterprise** (customtkinter) con pantalla completa, **modo protegido por defecto** con valores oficiales, **simulador interactivo desbloqueable** (pestañas editables, candado de solo lectura, botón restauración), **KPIs ejecutivos**, **gráficos duales**, **importación/exportación de escenarios (CSV/Excel)**, **reporte ejecutivo multi-hoja**, **modal ROI** y **modal Licencia** |
+| `interfaz.py` | **Interfaz gráfica Enterprise** (customtkinter) con pantalla completa, modo protegido, simulador de escenarios, KPIs, gráficas de costos y capacidad visibles desde el inicio, exportación CSV/Excel y Asistente IA Gemini con contexto dinámico |
 | `asignacion_logistica.csv` | Plan de asignación óptima (Centro → Zona, unidades) |
 | `documentacion_tecnica.md` | Informe técnico completo (secciones 1-5, 7-8, 13-15, referencias APA, Anexo A) |
 | `pitch_comercial.md` | Modelo de negocio, justificación financiera, ROI y propuesta de valor |
@@ -36,7 +36,7 @@ El modelo decide **qué centros abrir** y **cómo asignar la demanda** para mini
 
 | Rama | Propósito | Estado |
 |------|-----------|--------|
-| **`main`** | **Producto comercial completo** — Incluye versión base oficial ($182,500 USD / 24.90% ahorro) **y** simulador interactivo desbloqueable. Al iniciar, la interfaz muestra los valores oficiales en **modo protegido (solo lectura)**. Un clic en **"🔓 Habilitar Edición"** + confirmación activa el simulador completo (pestañas editables, recálculo en vivo, botón **✅ Confirmar y Recalcular**, y **↩ Restaurar Valores Base** que vuelve al caso oficial). Incluye **KPIs ejecutivos**, **gráficos duales**, **importación/exportación de escenarios**, **reporte ejecutivo multi-hoja (.xlsx/.csv)**, **modal ROI/Licencia** y **ejecutable standalone Windows**. | 🟢 Oficial / Completa |
+| **`main`** | **Producto comercial completo** — Caso base oficial ($182,500 USD / 24.90% ahorro), simulador interactivo, gráficas desde el inicio, exportación de escenarios y Asistente IA con Gemini. Los campos inician protegidos y la API Key se configura localmente. | 🟢 Oficial / Completa |
 
 ---
 
@@ -114,7 +114,7 @@ $$\min \sum_i C_i^{\text{fijo}} y_i + \sum_i \sum_j C_{ij}^{\text{transporte}} x
 
 ## Requisitos (Solo para Desarrollo)
 
-- Python 3.8+
+- Python 3.10+
 - `pip install -r requirements.txt`
 
 ```bash
@@ -122,6 +122,16 @@ pip install -r requirements.txt
 ```
 
 **Nota:** Para uso comercial directo **no se requiere Python**. Descargue `MIP_Retail_Optimizer.exe` desde [Releases](https://github.com/saithfortxd1/proyecto-io-retail/releases) y ejecútelo directamente en Windows 10/11.
+
+### Configurar Gemini (opcional)
+
+La optimización PuLP/CBC funciona sin internet. El Asistente IA requiere conexión y una API Key de Google AI Studio:
+
+1. Copia `.env.example` como `.env` junto a `interfaz.py` y configura `GEMINI_API_KEY=tu_clave`.
+2. Alternativamente, en la aplicación pulsa **🔑 Configurar API Key** para guardarla en `config_ia.json` junto al programa (en el `.exe`, junto al ejecutable).
+3. `.env` y `config_ia.json` están excluidos de Git. No compartas ni subas claves; `.env.example` solo contiene un valor de muestra.
+
+Al enviar una pregunta, el asistente incluye los costos fijos, capacidades, demandas, baseline, centros abiertos, último resultado y matriz de tarifas vigente. La matriz de tarifas actualmente no es editable desde la interfaz. Las consultas corren en un hilo secundario; si Gemini no está disponible, las demás funciones continúan operando.
 
 ---
 
@@ -143,7 +153,9 @@ python interfaz.py
 - **Importar/Exportar**: `📂 Importar Escenario` (.csv/.xlsx) | `📊 Exportar Reporte Ejecutivo` (.xlsx/.csv).
 - **ROI/Licencia**: Botón `💼 Licencia y ROI` en header → modal ejecutivo con propuesta de valor, ROI >300%, payback <3 meses, modelo 3 fases.
 - **Pantalla completa**: `F11` alterna, `Esc` sale.
-- KPIs tarjetas, gráficos duales, tabla asignación, exportación reporte multi-hoja.
+- Gráficas de costo baseline/óptimo y capacidad por centro visibles desde el arranque y actualizadas tras cada cálculo.
+- **Asistente IA** desde el sidebar o el Dashboard: explicación del modelo, resultados actuales y guía de uso; incluye preguntas rápidas.
+- KPIs tarjetas, tabla de asignación y exportación de reportes.
 
 ---
 
@@ -155,6 +167,7 @@ pyinstaller --noconfirm --onefile --windowed \
   --name "MIP_Retail_Optimizer" \
   --collect-all pulp \
   --collect-all customtkinter \
+  --collect-all google.genai \
   interfaz.py
 ```
 
