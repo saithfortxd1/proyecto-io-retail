@@ -1,5 +1,10 @@
+import os
 import pulp
 import pandas as pd
+import subprocess
+import sys
+import threading
+from unittest.mock import patch
 
 # Parámetros por defecto del caso de estudio original
 ZONAS_DEFAULT = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6']
@@ -15,6 +20,37 @@ COSTOS_ENVIO_DEFAULT = [
 ]
 COSTO_BASELINE_DEFAULT = 243000
 MAX_CENTROS_DEFAULT = 2
+
+_CBC_LAUNCH_LOCK = threading.Lock()
+
+
+def _is_cbc_command(command):
+    executable = command[0] if isinstance(command, (list, tuple)) and command else command
+    if not isinstance(executable, (str, bytes, os.PathLike)):
+        return False
+    executable_name = os.path.basename(os.fsdecode(os.fspath(executable))).lower()
+    return executable_name in {"cbc", "cbc.exe"}
+
+
+def _solve_with_cbc(model):
+    solver = pulp.PULP_CBC_CMD(msg=False)
+    if not sys.platform.startswith("win"):
+        return model.solve(solver)
+
+    with _CBC_LAUNCH_LOCK:
+        original_popen = subprocess.Popen
+
+        def popen_without_console(*args, **kwargs):
+            command = args[0] if args else kwargs.get("args")
+            if _is_cbc_command(command):
+                kwargs["creationflags"] = (
+                    kwargs.get("creationflags") or 0
+                ) | subprocess.CREATE_NO_WINDOW
+                kwargs["shell"] = False
+            return original_popen(*args, **kwargs)
+
+        with patch.object(subprocess, "Popen", popen_without_console):
+            return model.solve(solver)
 
 
 def resolver_modelo(
@@ -130,7 +166,7 @@ def resolver_modelo(
         model += pulp.lpSum(y[i] for i in range(n_ubicaciones)) <= max_centros
         
         # Resolver
-        model.solve()
+        _solve_with_cbc(model)
         
         # Verificar estado
         status = pulp.LpStatus[model.status]

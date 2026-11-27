@@ -6,16 +6,14 @@ import os
 import json
 import sys
 import re
+import traceback
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.figure import Figure
 import openpyxl
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font, PatternFill
 import threading
-import time
 from dotenv import load_dotenv
 from google import genai
 
@@ -32,6 +30,7 @@ APP_DIR = os.path.dirname(
 )
 load_dotenv(os.path.join(APP_DIR, ".env"))
 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 AI_SYSTEM_INSTRUCTION = """
 Eres el asistente de MIP Retail Optimizer, una herramienta de apoyo a decisiones
@@ -157,9 +156,32 @@ ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
 
+def _record_exception(exception_type, exception, traceback_object):
+    log_directory = os.path.join(
+        os.getenv("LOCALAPPDATA") or APP_DIR,
+        "MIP_Retail_Optimizer"
+    )
+    try:
+        os.makedirs(log_directory, exist_ok=True)
+        with open(
+            os.path.join(log_directory, "errores.log"),
+            "a",
+            encoding="utf-8"
+        ) as log_file:
+            traceback.print_exception(
+                exception_type,
+                exception,
+                traceback_object,
+                file=log_file
+            )
+    except OSError:
+        traceback.print_exception(exception_type, exception, traceback_object)
+
+
 class MIPRetailOptimizerApp:
     def __init__(self, root):
         self.root = root
+        self.root.report_callback_exception = self.report_callback_exception
         self.root.title("MIP Retail Optimizer™ Enterprise")
         self.root.geometry("1400x900")
         self.root.minsize(1366, 768)
@@ -174,9 +196,11 @@ class MIPRetailOptimizerApp:
         self.root.bind('<F11>', self.toggle_fullscreen)
         self.root.bind('<Escape>', self.end_fullscreen)
         self.root.bind_all("<MouseWheel>", self._scroll_active_view, add="+")
+        self._wheel_accum = 0
         
         # Estado
         self.current_view = "dashboard"
+        self.active_scroll_frame = None
         self.modo_edicion = False
         self.costo_actual = COSTO_BASELINE_DEFAULT
         self.costo_optimo = None
@@ -185,8 +209,6 @@ class MIPRetailOptimizerApp:
         self.entry_vars = {}
         self.execution_step = 0
         self.is_executing = False
-        self.api_key_load_error = None
-        self.api_key = self._load_api_key()
         self.chat_busy = False
         self.chat_conversation = []
         self.chat_messages = []
@@ -200,9 +222,15 @@ class MIPRetailOptimizerApp:
         self.optimization_request_id = 0
         self.solver_thread = None
         self.toast_frame = None
+        self.toast_shadow = None
         self.toast_after_id = None
         self.chart_canvases = []
         self.scroll_frames = {}
+        self.floating_chat_animation_job = None
+        self.floating_chat_open = False
+        self.manual_page_index = 0
+        self.manual_animation_job = None
+        self.manual_animation_token = 0
         
         # Variables Entry
         self.setup_styles()
@@ -218,7 +246,28 @@ class MIPRetailOptimizerApp:
         kwargs.setdefault("corner_radius", 10)
         kwargs.setdefault("border_width", 1)
         kwargs.setdefault("border_color", COLORS["BORDER"])
-        return ctk.CTkButton(master, **kwargs)
+        button = ctk.CTkButton(master, **kwargs)
+        base_border = kwargs["border_color"]
+        hover_border = kwargs.get("hover_color", COLORS["BORDER_FOCUS"])
+        button.bind(
+            "<Enter>",
+            lambda _: button.configure(border_color=hover_border),
+            add=True
+        )
+        button.bind(
+            "<Leave>",
+            lambda _: button.configure(border_color=base_border),
+            add=True
+        )
+        return button
+
+    def report_callback_exception(self, exception_type, exception, traceback_object):
+        _record_exception(exception_type, exception, traceback_object)
+        self.mostrar_toast(
+            "Ocurrió un error inesperado. La aplicación sigue activa; consulta errores.log.",
+            "error",
+            duration=5000
+        )
 
     def mostrar_toast(self, message, kind="success", duration=2800):
         palette = {
@@ -233,11 +282,14 @@ class MIPRetailOptimizerApp:
             self.toast_after_id = None
         if self.toast_frame and self.toast_frame.winfo_exists():
             self.toast_frame.destroy()
+        if self.toast_shadow and self.toast_shadow.winfo_exists():
+            self.toast_shadow.destroy()
 
         self.toast_frame = ctk.CTkFrame(
             self.root,
             fg_color=background,
-            corner_radius=12,
+            bg_color=COLORS["BG_MAIN"],
+            corner_radius=14,
             border_width=1,
             border_color=background
         )
@@ -249,6 +301,15 @@ class MIPRetailOptimizerApp:
             justify="left",
             wraplength=420
         ).pack(padx=18, pady=12)
+        self.toast_frame.update_idletasks()
+        self.toast_shadow = ctk.CTkFrame(
+            self.root,
+            width=self.toast_frame.winfo_reqwidth(),
+            height=self.toast_frame.winfo_reqheight(),
+            fg_color=COLORS["BORDER"],
+            corner_radius=14
+        )
+        self.toast_shadow.place(relx=1, rely=1, x=-22, y=-76, anchor="se")
         self.toast_frame.place(relx=1, rely=1, x=-24, y=-78, anchor="se")
         self.toast_frame.lift()
         self.toast_after_id = self.root.after(duration, self._dismiss_toast)
@@ -258,6 +319,9 @@ class MIPRetailOptimizerApp:
         if self.toast_frame and self.toast_frame.winfo_exists():
             self.toast_frame.destroy()
         self.toast_frame = None
+        if self.toast_shadow and self.toast_shadow.winfo_exists():
+            self.toast_shadow.destroy()
+        self.toast_shadow = None
 
     def confirmar_accion(self, title, message, confirm_text="Confirmar"):
         dialog = ctk.CTkToplevel(self.root)
@@ -325,7 +389,7 @@ class MIPRetailOptimizerApp:
         return result["confirmed"]
 
     def _scroll_active_view(self, event):
-        scroll_frame = self.scroll_frames.get(self.current_view)
+        scroll_frame = self.active_scroll_frame or self.scroll_frames.get(self.current_view)
         if scroll_frame is None or not scroll_frame.winfo_exists():
             return
 
@@ -337,13 +401,17 @@ class MIPRetailOptimizerApp:
                     break
                 widget = getattr(widget, "master", None)
 
-        delta = event.delta
-        if not delta:
+        if not event.delta:
             return
 
-        units = int(-delta / 30) if sys.platform.startswith("win") else int(-delta)
-        if units == 0:
-            units = -1 if delta > 0 else 1
+        if sys.platform.startswith("win"):
+            self._wheel_accum += event.delta
+            if abs(self._wheel_accum) < 40:
+                return "break"
+            units = -1 if self._wheel_accum > 0 else 1
+            self._wheel_accum = 0
+        else:
+            units = -1 if event.delta > 0 else 1
         scroll_frame._parent_canvas.yview_scroll(units, "units")
         return "break"
         
@@ -467,14 +535,14 @@ class MIPRetailOptimizerApp:
         # Navegación
         self.nav_buttons = {}
         nav_items = [
-            ("dashboard", "📊  Dashboard y Simulación", "Vista principal de trabajo"),
-            ("matrix", "📋  Matriz de Rutas y Reportes", "Tabla completa con exportación"),
-            ("manual", "📖  Manual de Uso y Modelo", "Guía interactiva paso a paso"),
-            ("assistant", "🤖 Asistente IA (Gemini)", "Consulta resultados y escenarios"),
-            ("license", "💼  Licencia y ROI Comercial", "Propuesta de valor y ROI >300%"),
+            ("dashboard", "📊  Dashboard y Simulación"),
+            ("matrix", "📋  Matriz de Rutas y Reportes"),
+            ("manual", "📖  Manual de Uso y Modelo"),
+            ("assistant", "🤖 Asistente IA (Gemini)"),
+            ("license", "💼  Licencia y ROI Comercial"),
         ]
         
-        for view_id, label, tooltip in nav_items:
+        for view_id, label in nav_items:
             btn = self._create_button(
                 self.sidebar,
                 text=label,
@@ -511,7 +579,7 @@ class MIPRetailOptimizerApp:
         
         # Frames por vista (solo uno visible a la vez)
         self.views = {}
-        for view_id, _, _ in nav_items:
+        for view_id, _ in nav_items:
             frame = ctk.CTkFrame(self.content_area, fg_color=COLORS["BG_MAIN"], corner_radius=0)
             frame.grid(row=0, column=0, sticky="nsew")
             frame.grid_rowconfigure(0, weight=1)
@@ -550,14 +618,14 @@ class MIPRetailOptimizerApp:
     def build_floating_chat(self):
         self.floating_chat_panel = ctk.CTkFrame(
             self.root,
-            width=380,
-            height=500,
-            fg_color=COLORS["BG_CARD"],
-            corner_radius=14,
+            width=460,
+            fg_color="#EEF2F6",
+            bg_color="#EEF2F6",
+            corner_radius=16,
             border_width=2,
             border_color=COLORS["BORDER"]
         )
-        self.floating_chat_panel.grid_propagate(False)
+        self.floating_chat_panel.pack_propagate(False)
 
         header = ctk.CTkFrame(
             self.floating_chat_panel,
@@ -571,16 +639,6 @@ class MIPRetailOptimizerApp:
             font=self.fonts["subsection"],
             text_color=COLORS["TEXT_WHITE"]
         ).pack(side="left", padx=12, pady=10)
-        self._create_button(
-            header,
-            text="🔑",
-            width=34,
-            height=34,
-            fg_color="transparent",
-            hover_color=COLORS["BG_SIDEBAR_HOVER"],
-            text_color=COLORS["TEXT_WHITE"],
-            command=self.configurar_api_key
-        ).pack(side="right", padx=(0, 4), pady=4)
         self._create_button(
             header,
             text="×",
@@ -599,6 +657,7 @@ class MIPRetailOptimizerApp:
             corner_radius=8
         )
         self.floating_chat_history.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        self.floating_chat_history.grid_columnconfigure(0, weight=1)
         input_frame = ctk.CTkFrame(self.floating_chat_panel, fg_color="transparent")
         input_frame.pack(fill="x", padx=10, pady=(0, 10))
         input_frame.grid_columnconfigure(0, weight=1)
@@ -620,44 +679,101 @@ class MIPRetailOptimizerApp:
         self.floating_chat_send_button.grid(row=0, column=1)
         self.floating_chat_input.bind(
             "<Return>",
-            lambda _event: self.enviar_mensaje_asistente(source="floating")
+            lambda _: self.enviar_mensaje_asistente(source="floating")
         )
         self._register_chat_surface(
             self.floating_chat_history,
-            self.floating_chat_send_button
+            self.floating_chat_send_button,
+            wrap_limit=350
         )
 
-        self.floating_chat_button = self._create_button(
+        self.floating_chat_button_container = ctk.CTkFrame(
             self.root,
+            width=202,
+            height=50,
+            fg_color="transparent",
+            bg_color=COLORS["BG_MAIN"]
+        )
+        self.floating_chat_button_container.grid_propagate(False)
+        self.floating_chat_button_container.grid_columnconfigure(0, weight=1)
+        self.floating_chat_button_container.grid_rowconfigure(0, weight=1)
+        ctk.CTkFrame(
+            self.floating_chat_button_container,
+            fg_color="#1D4ED8",
+            corner_radius=10
+        ).place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.floating_chat_button = self._create_button(
+            self.floating_chat_button_container,
             text="💬 Asistente Rápido",
             font=self.fonts["button"],
-            width=190,
-            height=44,
+            height=48,
             fg_color=COLORS["PRIMARY"],
             hover_color=COLORS["PRIMARY_HOVER"],
+            border_width=0,
             command=self._toggle_floating_chat
         )
+        self.floating_chat_button.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            pady=(0, 2)
+        )
+        self.floating_chat_open = False
         self._sync_floating_chat_visibility()
 
     def _sync_floating_chat_visibility(self):
         if self.current_view in {"dashboard", "matrix", "manual"}:
-            if not self.floating_chat_button.winfo_manager():
-                self.floating_chat_button.place(
+            if not self.floating_chat_button_container.winfo_manager():
+                self.floating_chat_button_container.place(
                     relx=1, rely=1, x=-24, y=-18, anchor="se"
                 )
         else:
-            self.floating_chat_button.place_forget()
+            self.floating_chat_button_container.place_forget()
             self.floating_chat_panel.place_forget()
+            self.floating_chat_open = False
+            if self.floating_chat_animation_job:
+                self.root.after_cancel(self.floating_chat_animation_job)
+                self.floating_chat_animation_job = None
 
     def _toggle_floating_chat(self):
-        if self.floating_chat_panel.winfo_manager():
-            self.floating_chat_panel.place_forget()
-            return
+        if self.floating_chat_animation_job:
+            self.root.after_cancel(self.floating_chat_animation_job)
+            self.floating_chat_animation_job = None
+
+        opening = not self.floating_chat_open
+        self.floating_chat_open = opening
+        if opening:
+            self.floating_chat_panel.place(
+                relx=1,
+                rely=0.1,
+                x=-500,
+                relheight=0.8,
+                anchor="ne"
+            )
+            self.floating_chat_panel.lift()
+            self.floating_chat_input.focus_set()
+        self._animate_floating_chat(opening, 0)
+
+    def _animate_floating_chat(self, opening, step):
+        steps = 10
+        start_x, end_x = (-500, -16) if opening else (-16, -500)
+        x = round(start_x + (end_x - start_x) * step / steps)
         self.floating_chat_panel.place(
-            relx=1, rely=1, x=-20, y=-72, anchor="se"
+            relx=1,
+            rely=0.1,
+            x=x,
+            relheight=0.8,
+            anchor="ne"
         )
-        self.floating_chat_panel.lift()
-        self.floating_chat_input.focus_set()
+        if step >= steps:
+            self.floating_chat_animation_job = None
+            if not opening:
+                self.floating_chat_panel.place_forget()
+            return
+        self.floating_chat_animation_job = self.root.after(
+            16,
+            lambda: self._animate_floating_chat(opening, step + 1)
+        )
         
     # ========================================================
     # VISTA 1: DASHBOARD Y SIMULACIÓN
@@ -706,14 +822,21 @@ class MIPRetailOptimizerApp:
         ).pack(side="right", padx=4)
         
         # ===== TARJETA: ESCENARIO ACTUAL =====
-        scenario_card = ctk.CTkFrame(
+        scenario_shadow = ctk.CTkFrame(
             main_scroll,
+            fg_color=COLORS["BORDER"],
+            corner_radius=12
+        )
+        scenario_shadow.pack(fill="x", pady=(0, 12))
+        scenario_card = ctk.CTkFrame(
+            scenario_shadow,
             fg_color=COLORS["BG_CARD"],
+            bg_color=COLORS["BORDER"],
             corner_radius=12,
             border_width=2,
             border_color=COLORS["BORDER"]
         )
-        scenario_card.pack(fill="x", pady=(0, 12))
+        scenario_card.pack(fill="x", pady=(0, 2))
         scenario_card.grid_columnconfigure(1, weight=1)
         
         ctk.CTkLabel(
@@ -747,14 +870,21 @@ class MIPRetailOptimizerApp:
             ).grid(row=2, column=i, sticky="w", padx=(24, 8), pady=(0, 20))
         
         # ===== PARÁMETROS DE ENTRADA =====
-        params_card = ctk.CTkFrame(
+        params_shadow = ctk.CTkFrame(
             main_scroll,
+            fg_color=COLORS["BORDER"],
+            corner_radius=12
+        )
+        params_shadow.pack(fill="x", pady=(0, 12))
+        params_card = ctk.CTkFrame(
+            params_shadow,
             fg_color=COLORS["BG_CARD"],
+            bg_color=COLORS["BORDER"],
             corner_radius=12,
             border_width=2,
             border_color=COLORS["BORDER"]
         )
-        params_card.pack(fill="x", pady=(0, 12))
+        params_card.pack(fill="x", pady=(0, 2))
         
         # Header con título + barra de herramientas
         params_header = ctk.CTkFrame(params_card, fg_color="transparent")
@@ -960,6 +1090,14 @@ class MIPRetailOptimizerApp:
         exec_card = ctk.CTkFrame(main_scroll, fg_color="transparent")
         exec_card.pack(fill="x", pady=(0, 16))
         exec_card.grid_columnconfigure(0, weight=1)
+        execute_shadow = ctk.CTkFrame(
+            exec_card,
+            fg_color="#1D4ED8",
+            corner_radius=10,
+            height=50
+        )
+        execute_shadow.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 0))
+        execute_shadow.grid_propagate(False)
         
         self.btn_execute = self._create_button(
             exec_card,
@@ -970,7 +1108,7 @@ class MIPRetailOptimizerApp:
             hover_color=COLORS["PRIMARY_HOVER"],
             command=self.iniciar_ejecucion_progresiva
         )
-        self.btn_execute.grid(row=0, column=0, sticky="ew", padx=4)
+        self.btn_execute.grid(row=0, column=0, sticky="ew", padx=4, pady=(0, 2))
         
         # ===== ÁREA DE EJECUCIÓN PROGRESIVA =====
         self.execution_card = ctk.CTkFrame(
@@ -1213,113 +1351,342 @@ class MIPRetailOptimizerApp:
 
         ctk.CTkLabel(
             scroll,
-            text="Manual interactivo",
+            text="Manual de Uso y Modelo",
             font=self.fonts["title"],
             text_color=COLORS["TEXT_PRIMARY"]
         ).pack(anchor="w", padx=4, pady=(0, 6))
         ctk.CTkLabel(
             scroll,
-            text="Sigue los cuatro pasos para configurar, resolver y analizar un escenario.",
+            text="Libro interactivo · cinco capítulos para entender y operar el optimizador.",
             font=self.fonts["body"],
             text_color=COLORS["TEXT_SECONDARY"]
         ).pack(anchor="w", padx=4, pady=(0, 16))
 
-        manual_steps = [
-            (
-                "1. Configurar Red",
-                "Define la red que deseas evaluar.",
-                "En Dashboard y Simulación, revisa costos fijos de L1–L4, capacidades, "
-                "demanda de Z1–Z6, máximo de centros y costo baseline. Pulsa Editar "
-                "Parámetros, actualiza los campos y elige Guardar Cambios para validar "
-                "y conservarlos en memoria. Si prefieres descartar, elige Cancelar Edición. "
-                "Las tarifas de envío de la matriz oficial no se editan desde esta versión.",
-                "Los datos oficiales suman 22,000 unidades al mes; los valores del estudio "
-                "abren L2 y L3 con costo de USD 182,500."
-            ),
-            (
-                "2. Ejecutar Branch-and-Bound",
-                "Resuelve el modelo MIP con los parámetros guardados.",
-                "Pulsa Ejecutar Optimización Matemática. El objetivo suma costos fijos de "
-                "apertura y costos variables de transporte. La demanda de cada zona debe "
-                "cubrirse exactamente; el flujo de cada centro no puede superar su capacidad "
-                "y la cantidad de centros abiertos respeta el máximo configurado. PuLP formula "
-                "el modelo y CBC busca la solución entera óptima con Branch-and-Bound.",
-                "El cálculo se ejecuta en segundo plano para mantener la interfaz receptiva."
-            ),
-            (
-                "3. Analizar Rutas",
-                "Comprueba costos, asignaciones y capacidad.",
-                "Revisa las tarjetas KPI y las gráficas de costos y utilización en Dashboard. "
-                "Abre Matriz de Rutas para ver cuánto envía cada centro a cada zona, el costo "
-                "unitario y el costo por ruta. Desde esa vista puedes exportar el reporte "
-                "ejecutivo a Excel o la matriz a CSV.",
-                "En el caso base, L2 atiende Z1–Z3 al 60% y L3 atiende Z4–Z6 al 83.3%."
-            ),
-            (
-                "4. Simular Escenarios",
-                "Evalúa cambios antes de ejecutar el modelo.",
-                "Edita costos fijos, capacidades, demandas, máximo de centros o baseline; "
-                "guarda los cambios y ejecuta la optimización para recalcular costos y "
-                "asignaciones. Compara el resultado con el último cálculo y restaura los "
-                "valores base cuando quieras volver al caso oficial. El asistente rápido "
-                "permite consultar el escenario visible sin salir de Dashboard, Matriz o Manual.",
-                "Un cambio en capacidad o costos puede alterar qué centros conviene abrir."
-            ),
+        self.manual_chapters = [
+            {
+                "title": "Portada y Propósito del Sistema (CFLP)",
+                "subtitle": "Optimizar la red logística equilibrando aperturas y transporte.",
+                "left_heading": "Propósito del sistema",
+                "left_text": (
+                    "MIP Retail Optimizer ayuda a decidir qué centros abrir y cómo "
+                    "abastecer seis zonas urbanas al menor costo mensual. El problema "
+                    "es un CFLP: localización de instalaciones con capacidad limitada."
+                ),
+                "right_heading": "Resultado de referencia",
+                "right_text": (
+                    "El caso oficial reduce el costo de USD 243,000 a USD 182,500 "
+                    "al mes. La red óptima ahorra USD 60,500, equivalente al 24.90%, "
+                    "y opera con los centros L2 y L3."
+                ),
+            },
+            {
+                "title": "Anatomía de Centros y Demandas (L1–L4 y Z1–Z6)",
+                "subtitle": "Cuatro ubicaciones candidatas abastecen seis zonas de demanda.",
+                "left_heading": "Centros candidatos",
+                "left_text": (
+                    "L1: costo fijo USD 45,000 y capacidad 15,000 unidades. "
+                    "L2: USD 50,000 y capacidad 20,000. L3: USD 38,000 y capacidad "
+                    "12,000. L4: USD 42,000 y capacidad 16,000 unidades al mes."
+                ),
+                "right_heading": "Demanda de las zonas",
+                "right_text": (
+                    "Z1–Z6 requieren 3,000, 4,000, 5,000, 3,500, 2,500 y 4,000 "
+                    "unidades mensuales, respectivamente: 22,000 en total. Las tarifas "
+                    "de transporte permanecen fijas en esta versión."
+                ),
+            },
+            {
+                "title": "El Motor Matemático MIP y Branch-and-Bound",
+                "subtitle": "Variables binarias deciden aperturas; flujos continuos asignan rutas.",
+                "left_heading": "Formulación MIP",
+                "left_text": (
+                    "La variable binaria y_i indica si abre el centro i; x_ij representa "
+                    "el flujo de i a la zona j. Se minimizan costos fijos más transporte, "
+                    "cubriendo exactamente cada demanda y respetando capacidades y el "
+                    "máximo de centros abiertos."
+                ),
+                "right_heading": "Resolución",
+                "right_text": (
+                    "PuLP construye el modelo y CBC ejecuta Branch-and-Bound. El algoritmo "
+                    "relaja el modelo, ramifica sobre decisiones enteras y compara cotas "
+                    "hasta certificar una solución óptima global."
+                ),
+            },
+            {
+                "title": "Guía Paso a Paso de Simulación en Vivo",
+                "subtitle": "Edita parámetros, guarda explícitamente y ejecuta el escenario.",
+                "left_heading": "Configurar y calcular",
+                "left_text": (
+                    "En Dashboard, elige Editar Parámetros. Cambia costos fijos, "
+                    "capacidades, demandas, límite de centros o baseline; pulsa Guardar "
+                    "Cambios para validar. Después selecciona Ejecutar Optimización "
+                    "Matemática para resolver en segundo plano."
+                ),
+                "right_heading": "Revisar y exportar",
+                "right_text": (
+                    "Analiza KPIs, gráficas y asignaciones en Matriz de Rutas. Usa "
+                    "Exportar para guardar CSV o Excel. Restaurar Base recupera los "
+                    "valores oficiales; Cancelar Edición descarta modificaciones sin "
+                    "recalcular el modelo."
+                ),
+            },
+            {
+                "title": "Interpretación de KPIs y Toma de Decisiones",
+                "subtitle": "Interpreta el resultado junto con la sensibilidad y el contexto operativo.",
+                "left_heading": "Indicadores del caso base",
+                "left_text": (
+                    "L2 atiende 12,000 de 20,000 unidades: 60%. L3 atiende 10,000 "
+                    "de 12,000: 83.3%. El costo óptimo suma USD 88,000 fijos y "
+                    "USD 94,500 de transporte."
+                ),
+                "right_heading": "Criterio gerencial",
+                "right_text": (
+                    "L2+L4 cuesta solo USD 500 más, por lo que la decisión es sensible "
+                    "a costos, tarifas y capacidad. Revisa datos reales y restricciones "
+                    "no modeladas —como contratos, traslados o estacionalidad— antes de "
+                    "aplicar cambios operativos."
+                ),
+            },
         ]
-        self.manual_tabs = ctk.CTkTabview(
+
+        book = ctk.CTkFrame(
             scroll,
-            height=500,
             fg_color=COLORS["BG_CARD"],
-            segmented_button_fg_color="#FFFFFF",
-            segmented_button_selected_color=COLORS["PRIMARY"],
-            segmented_button_selected_hover_color=COLORS["PRIMARY_HOVER"],
-            segmented_button_unselected_color="#F1F5F9",
-            segmented_button_unselected_hover_color="#E2E8F0",
-            text_color=COLORS["TEXT_PRIMARY"],
+            corner_radius=16,
+            border_width=2,
+            border_color=COLORS["BORDER"]
+        )
+        book.pack(fill="both", expand=True, padx=4, pady=(0, 16))
+        book.grid_columnconfigure(0, weight=1)
+
+        self.manual_marker = ctk.CTkLabel(
+            book,
+            text="CAPÍTULO 1 / 5",
+            font=self.fonts["button_small"],
+            text_color=COLORS["PRIMARY"],
+            fg_color="#DBEAFE",
             corner_radius=10
         )
-        self.manual_tabs.pack(fill="x", padx=4, pady=(0, 20))
+        self.manual_marker.pack(anchor="e", padx=18, pady=(16, 8))
 
-        accents = (COLORS["PRIMARY"], COLORS["SUCCESS"], COLORS["WARNING"], "#7C3AED")
-        for index, (tab_name, title, content, tip) in enumerate(manual_steps):
-            tab = self.manual_tabs.add(tab_name)
-            tab.grid_columnconfigure(0, weight=1)
-            for heading, text, accent in (
-                (title, content, accents[index]),
-                ("Punto clave", tip, COLORS["SUCCESS"]),
-            ):
-                card = ctk.CTkFrame(
-                    tab,
-                    fg_color=COLORS["BG_CARD"],
-                    corner_radius=12,
-                    border_width=2,
-                    border_color=COLORS["BORDER"]
-                )
-                card.pack(fill="x", padx=10, pady=(12, 4))
-                ctk.CTkLabel(
-                    card,
-                    text=heading,
-                    font=self.fonts["section"],
-                    text_color=accent,
-                    anchor="w"
-                ).pack(anchor="w", padx=24, pady=(18, 8))
-                body = ctk.CTkLabel(
-                    card,
-                    text=text,
-                    font=self.fonts["body"],
-                    text_color=COLORS["TEXT_SECONDARY"],
-                    justify="left",
-                    anchor="w",
-                    wraplength=800
-                )
-                body.pack(anchor="w", padx=24, pady=(0, 18))
-                card.bind(
-                    "<Configure>",
-                    lambda event, label=body: label.configure(
-                        wraplength=max(180, event.width - 64)
-                    ),
-                    add=True
-                )
+        self.manual_pages = ctk.CTkFrame(book, fg_color="transparent", height=430)
+        self.manual_pages.pack(fill="both", expand=True, padx=10)
+        self.manual_pages.grid_propagate(False)
+        self.manual_pages.grid_columnconfigure((0, 2), weight=1, uniform="manual_page")
+        self.manual_pages.grid_columnconfigure(1, minsize=4)
+        self.manual_pages.grid_rowconfigure(0, weight=1)
+
+        self.manual_left_shadow = ctk.CTkFrame(
+            self.manual_pages,
+            fg_color=COLORS["BORDER"],
+            corner_radius=12
+        )
+        self.manual_left_shadow.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=(0, 2),
+            pady=(10, 6)
+        )
+        self.manual_left_page = ctk.CTkFrame(
+            self.manual_pages,
+            fg_color="#FFFFFF",
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["BORDER"]
+        )
+        self.manual_left_page.grid(row=0, column=0, sticky="nsew", padx=(0, 2), pady=8)
+        self.manual_spine = ctk.CTkFrame(
+            self.manual_pages,
+            fg_color="#CBD5E1",
+            corner_radius=2,
+            width=4
+        )
+        self.manual_spine.grid(row=0, column=1, sticky="ns", pady=16)
+        self.manual_right_shadow = ctk.CTkFrame(
+            self.manual_pages,
+            fg_color=COLORS["BORDER"],
+            corner_radius=12
+        )
+        self.manual_right_shadow.grid(
+            row=0,
+            column=2,
+            sticky="nsew",
+            padx=(2, 0),
+            pady=(10, 6)
+        )
+        self.manual_right_page = ctk.CTkFrame(
+            self.manual_pages,
+            fg_color="#FFFFFF",
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["BORDER"]
+        )
+        self.manual_right_page.grid(row=0, column=2, sticky="nsew", padx=(2, 0), pady=8)
+
+        self.manual_title = ctk.CTkLabel(
+            self.manual_left_page,
+            text="",
+            font=self.fonts["section"],
+            text_color=COLORS["PRIMARY"],
+            justify="left",
+            anchor="nw",
+            wraplength=460
+        )
+        self.manual_title.pack(anchor="w", padx=24, pady=(28, 12))
+        self.manual_subtitle = ctk.CTkLabel(
+            self.manual_left_page,
+            text="",
+            font=self.fonts["body"],
+            text_color=COLORS["TEXT_SECONDARY"],
+            justify="left",
+            anchor="nw",
+            wraplength=460
+        )
+        self.manual_subtitle.pack(anchor="w", padx=24, pady=(0, 28))
+        self.manual_left_heading = ctk.CTkLabel(
+            self.manual_left_page,
+            text="",
+            font=self.fonts["subsection"],
+            text_color=COLORS["TEXT_PRIMARY"],
+            anchor="w"
+        )
+        self.manual_left_heading.pack(anchor="w", padx=24, pady=(0, 10))
+        self.manual_left_body = ctk.CTkLabel(
+            self.manual_left_page,
+            text="",
+            font=self.fonts["body"],
+            text_color=COLORS["TEXT_SECONDARY"],
+            justify="left",
+            anchor="nw",
+            wraplength=460
+        )
+        self.manual_left_body.pack(anchor="w", fill="x", padx=24)
+
+        self.manual_right_heading = ctk.CTkLabel(
+            self.manual_right_page,
+            text="",
+            font=self.fonts["subsection"],
+            text_color=COLORS["SUCCESS"],
+            anchor="w"
+        )
+        self.manual_right_heading.pack(anchor="w", padx=24, pady=(28, 10))
+        self.manual_right_body = ctk.CTkLabel(
+            self.manual_right_page,
+            text="",
+            font=self.fonts["body"],
+            text_color=COLORS["TEXT_SECONDARY"],
+            justify="left",
+            anchor="nw",
+            wraplength=460
+        )
+        self.manual_right_body.pack(anchor="w", fill="x", padx=24)
+        self.manual_left_page.bind(
+            "<Configure>",
+            lambda event: self._update_manual_wrap(self.manual_left_page, event),
+            add=True
+        )
+        self.manual_right_page.bind(
+            "<Configure>",
+            lambda event: self._update_manual_wrap(self.manual_right_page, event),
+            add=True
+        )
+
+        footer = ctk.CTkFrame(book, fg_color="transparent")
+        footer.pack(fill="x", padx=18, pady=(12, 18))
+        footer.grid_columnconfigure(1, weight=1)
+        self.manual_previous_button = self._create_button(
+            footer,
+            text="◀ Página Anterior",
+            width=170,
+            fg_color="#F1F5F9",
+            hover_color="#E2E8F0",
+            text_color=COLORS["TEXT_SECONDARY"],
+            command=lambda: self._change_manual_page(-1)
+        )
+        self.manual_previous_button.grid(row=0, column=0, padx=(0, 12))
+        self.manual_progress = ctk.CTkProgressBar(
+            footer,
+            height=8,
+            corner_radius=4,
+            fg_color="#E2E8F0",
+            progress_color=COLORS["PRIMARY"]
+        )
+        self.manual_progress.grid(row=0, column=1, sticky="ew")
+        self.manual_next_button = self._create_button(
+            footer,
+            text="Página Siguiente ▶",
+            width=170,
+            fg_color=COLORS["PRIMARY"],
+            hover_color=COLORS["PRIMARY_HOVER"],
+            command=lambda: self._change_manual_page(1)
+        )
+        self.manual_next_button.grid(row=0, column=2, padx=(12, 0))
+        self._show_manual_page(0)
+
+    def _update_manual_wrap(self, page, event):
+        wraplength = max(180, event.width - 64)
+        page_labels = (
+            (self.manual_title, self.manual_subtitle, self.manual_left_body)
+            if page is self.manual_left_page
+            else (self.manual_right_body,)
+        )
+        for label in page_labels:
+            label.configure(wraplength=wraplength)
+
+    def _change_manual_page(self, direction):
+        next_page = self.manual_page_index + direction
+        if 0 <= next_page < len(self.manual_chapters):
+            self._show_manual_page(next_page)
+
+    def _show_manual_page(self, page_index):
+        if self.manual_animation_job:
+            self.root.after_cancel(self.manual_animation_job)
+            self.manual_animation_job = None
+        self.manual_animation_token += 1
+        token = self.manual_animation_token
+        self.manual_page_index = page_index
+        chapter = self.manual_chapters[page_index]
+        self.manual_marker.configure(text=f"CAPÍTULO {page_index + 1} / {len(self.manual_chapters)}")
+        self.manual_title.configure(text=chapter["title"])
+        self.manual_subtitle.configure(text=chapter["subtitle"])
+        self.manual_left_heading.configure(text=chapter["left_heading"])
+        self.manual_right_heading.configure(text=chapter["right_heading"])
+        self.manual_left_body.configure(text="")
+        self.manual_right_body.configure(text="")
+        self.manual_progress.set((page_index + 1) / len(self.manual_chapters))
+        self.manual_previous_button.configure(
+            state="normal" if page_index > 0 else "disabled"
+        )
+        self.manual_next_button.configure(
+            state="normal" if page_index < len(self.manual_chapters) - 1 else "disabled"
+        )
+        self._reveal_manual_page(token, chapter, 0, 0)
+
+    def _reveal_manual_page(self, token, chapter, column, word_index):
+        if token != self.manual_animation_token:
+            return
+        body = self.manual_left_body if column == 0 else self.manual_right_body
+        text_key = "left_text" if column == 0 else "right_text"
+        words = chapter[text_key].split()
+        if word_index >= len(words):
+            if column == 0:
+                self._reveal_manual_page(token, chapter, 1, 0)
+            else:
+                self.manual_animation_job = None
+            return
+        chunk = " ".join(words[word_index:word_index + 5])
+        prefix = body.cget("text")
+        body.configure(text=f"{prefix} {chunk}".strip())
+        self.manual_animation_job = self.root.after(
+            32,
+            lambda: self._reveal_manual_page(
+                token,
+                chapter,
+                column,
+                word_index + 5
+            )
+        )
 
     # ========================================================
     # VISTA 4: ASISTENTE IA
@@ -1345,17 +1712,6 @@ class MIPRetailOptimizerApp:
             font=self.fonts["body"],
             text_color=COLORS["TEXT_SECONDARY"]
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
-
-        self._create_button(
-            header,
-            text="🔑 Configurar API Key",
-            font=self.fonts["button_small"],
-            height=36,
-            fg_color="#F1F5F9",
-            hover_color="#E2E8F0",
-            text_color=COLORS["TEXT_SECONDARY"],
-            command=self.configurar_api_key
-        ).grid(row=0, column=1, rowspan=2, sticky="e", padx=4)
 
         card = ctk.CTkFrame(
             frame,
@@ -1417,7 +1773,7 @@ class MIPRetailOptimizerApp:
             placeholder_text="Escribe una pregunta sobre resultados o uso del software…"
         )
         self.chat_input.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        self.chat_input.bind("<Return>", lambda _event: self.enviar_mensaje_asistente())
+        self.chat_input.bind("<Return>", lambda _: self.enviar_mensaje_asistente())
         self.chat_send_button = self._create_button(
             input_frame,
             text="Enviar",
@@ -1431,150 +1787,26 @@ class MIPRetailOptimizerApp:
 
         self.chat_status.configure(
             text=(
-                f"Clave detectada en {self.api_key_source}."
-                if self.api_key
-                else "Configura una API Key para consultar Gemini; la optimización local funciona sin internet."
+                "Gemini está habilitado mediante GEMINI_API_KEY."
+                if GEMINI_API_KEY
+                else (
+                    "Gemini no está configurado. Añade GEMINI_API_KEY al .env junto "
+                    "al ejecutable; la optimización local funciona sin internet."
+                )
             )
         )
-        if self.api_key_load_error:
-            self._append_chat(f"Aviso de configuración: {self.api_key_load_error}")
         self._append_chat(
             "Asistente: Hola. Puedo explicar el modelo, comparar el escenario actual "
             "y guiarte por las pestañas. Al enviar una pregunta adjunto los parámetros "
             "visibles y el último resultado calculado."
         )
 
-    def _load_api_key(self):
-        environment_key = os.getenv("GEMINI_API_KEY", "").strip()
-        if environment_key:
-            self.api_key_source = "GEMINI_API_KEY/.env"
-            return environment_key
-
-        config_path = os.path.join(APP_DIR, "config_ia.json")
-        if not os.path.exists(config_path):
-            self.api_key_source = None
-            return None
-
-        try:
-            with open(config_path, "r", encoding="utf-8") as config_file:
-                config = json.load(config_file)
-        except (OSError, json.JSONDecodeError) as error:
-            self.api_key_load_error = f"No se pudo leer config_ia.json: {error}"
-            self.api_key_source = None
-            return None
-
-        if not isinstance(config, dict):
-            self.api_key_load_error = "config_ia.json debe contener un objeto JSON."
-            self.api_key_source = None
-            return None
-
-        local_key = config.get("GEMINI_API_KEY", "")
-        if isinstance(local_key, str) and local_key.strip():
-            self.api_key_source = "config_ia.json"
-            return local_key.strip()
-
-        self.api_key_source = None
-        return None
-
-    def configurar_api_key(self):
-        if os.getenv("GEMINI_API_KEY", "").strip():
-            self.mostrar_toast(
-                "Gemini ya está configurado mediante GEMINI_API_KEY/.env.",
-                "info"
-            )
-            return
-
-        api_key = self._solicitar_api_key()
-        if api_key is None or not api_key.strip():
-            return
-
-        config_path = os.path.join(APP_DIR, "config_ia.json")
-        try:
-            with open(config_path, "w", encoding="utf-8") as config_file:
-                json.dump({"GEMINI_API_KEY": api_key.strip()}, config_file, indent=2)
-        except OSError as error:
-            self.mostrar_toast(f"No se pudo guardar la clave local: {error}", "error", duration=4500)
-            return
-
-        self.api_key = api_key.strip()
-        self.api_key_source = "config_ia.json"
-        self.chat_status.configure(text="Clave configurada y guardada localmente.")
-        self._append_chat("Sistema: API Key guardada en config_ia.json (archivo local ignorado por Git).")
-        self.mostrar_toast("API Key configurada localmente.", "success")
-
-    def _solicitar_api_key(self):
-        dialog = ctk.CTkToplevel(self.root)
-        dialog.title("Configurar API Key de Gemini")
-        dialog.resizable(False, False)
-        dialog.transient(self.root)
-        dialog.configure(fg_color=COLORS["BG_MAIN"])
-        width, height = 480, 230
-        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
-        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
-        dialog.geometry(f"{width}x{height}+{x}+{y}")
-
-        result: dict[str, str | None] = {"api_key": None}
-        card = ctk.CTkFrame(
-            dialog,
-            fg_color=COLORS["BG_CARD"],
-            corner_radius=14,
-            border_width=2,
-            border_color=COLORS["BORDER"]
-        )
-        card.pack(fill="both", expand=True, padx=14, pady=14)
-        ctk.CTkLabel(
-            card,
-            text="Conecta tu asistente",
-            font=self.fonts["section"],
-            text_color=COLORS["TEXT_PRIMARY"]
-        ).pack(anchor="w", padx=20, pady=(18, 4))
-        ctk.CTkLabel(
-            card,
-            text="La clave se guarda localmente junto a la aplicación.",
-            font=self.fonts["body_small"],
-            text_color=COLORS["TEXT_SECONDARY"]
-        ).pack(anchor="w", padx=20, pady=(0, 10))
-        entry = ctk.CTkEntry(card, show="*", height=38, font=self.fonts["body"])
-        entry.pack(fill="x", padx=20, pady=(0, 12))
-
-        actions = ctk.CTkFrame(card, fg_color="transparent")
-        actions.pack(fill="x", padx=20, pady=(0, 12))
-        self._create_button(
-            actions,
-            text="Cancelar",
-            fg_color="#F1F5F9",
-            hover_color="#E2E8F0",
-            text_color=COLORS["TEXT_SECONDARY"],
-            command=dialog.destroy
-        ).pack(side="right", padx=(8, 0))
-
-        def save_key():
-            value = entry.get().strip()
-            if not value:
-                self.mostrar_toast("Pega una API Key válida para continuar.", "warning")
-                return
-            result["api_key"] = value
-            dialog.destroy()
-
-        self._create_button(
-            actions,
-            text="Guardar clave",
-            fg_color=COLORS["PRIMARY"],
-            hover_color=COLORS["PRIMARY_HOVER"],
-            command=save_key
-        ).pack(side="right")
-        dialog.bind("<Return>", lambda _event: save_key())
-        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
-        dialog.grab_set()
-        entry.focus_set()
-        self.root.wait_window(dialog)
-        return result["api_key"]
-
-    def _register_chat_surface(self, history, send_button):
+    def _register_chat_surface(self, history, send_button, wrap_limit=None):
         surface = {
             "history": history,
             "body_labels": [],
             "send_button": send_button,
+            "wrap_limit": wrap_limit,
         }
         history.bind(
             "<Configure>",
@@ -1602,7 +1834,10 @@ class MIPRetailOptimizerApp:
         history = surface["history"]
         row = ctk.CTkFrame(history, fg_color="transparent")
         row.grid_columnconfigure(0, weight=1)
-        opposing_pad = max(32, min(88, int(max(history.winfo_width(), 380) * 0.16)))
+        opposing_pad = (
+            20 if surface["wrap_limit"]
+            else max(32, min(88, int(max(history.winfo_width(), 380) * 0.16)))
+        )
         bubble = ctk.CTkFrame(
             row,
             fg_color=bubble_color,
@@ -1631,7 +1866,7 @@ class MIPRetailOptimizerApp:
             text_color=text_color,
             justify="left",
             anchor="w",
-            wraplength=max(180, history.winfo_width() - 150)
+            wraplength=self._chat_wraplength(surface, history.winfo_width())
         )
         body_label.pack(anchor="w", padx=12, pady=(2, 8))
         self.chat_label_histories[body_label] = history
@@ -1641,10 +1876,18 @@ class MIPRetailOptimizerApp:
         return body_label
 
     def _update_chat_wrap(self, surface, event):
-        wraplength = max(120, event.width - 144)
+        wraplength = self._chat_wraplength(surface, event.width)
         for label in surface["body_labels"]:
             if label.winfo_exists():
                 label.configure(wraplength=wraplength)
+
+    @staticmethod
+    def _chat_wraplength(surface, width):
+        inset = 60 if surface["wrap_limit"] else 144
+        available_width = max(120, width - inset)
+        if surface["wrap_limit"]:
+            return min(surface["wrap_limit"], available_width)
+        return available_width
 
     def _scroll_chat_to_bottom(self, history):
         if history.winfo_exists():
@@ -1772,12 +2015,13 @@ class MIPRetailOptimizerApp:
             self.quick_questions_frame.grid_remove()
         self._append_chat("Tú: " + question)
 
-        if not self.api_key:
+        if not GEMINI_API_KEY:
             self._append_chat(
-                "Asistente: Para usar Gemini, pulsa «Configurar API Key». "
-                "El modelo de optimización y las demás vistas funcionan sin conexión."
+                "Asistente: Gemini no está configurado. Añade GEMINI_API_KEY al archivo "
+                ".env junto al ejecutable y reinicia la aplicación. La optimización local "
+                "y las demás vistas siguen disponibles sin conexión."
             )
-            self.mostrar_toast("Configura una API Key para consultar Gemini.", "info")
+            self.mostrar_toast("Gemini requiere GEMINI_API_KEY en el .env local.", "info")
             return
 
         context = self._assistant_context()
@@ -1788,7 +2032,7 @@ class MIPRetailOptimizerApp:
         self._start_thinking_bubbles()
         threading.Thread(
             target=self._request_gemini,
-            args=(question, context, self.api_key, list(self.chat_conversation[-12:])),
+            args=(question, context, GEMINI_API_KEY, list(self.chat_conversation[-12:])),
             daemon=True
         ).start()
 
@@ -2400,6 +2644,11 @@ class MIPRetailOptimizerApp:
         
         canvas1 = FigureCanvasTkAgg(fig1, master=self.chart1_canvas_frame)
         canvas1.get_tk_widget().pack(fill="both", expand=True)
+        canvas1.get_tk_widget().bind(
+            "<MouseWheel>",
+            self._scroll_active_view,
+            add=True
+        )
         canvas1.draw()
         canvas1.get_tk_widget().update_idletasks()
         self.chart_canvases.append(canvas1)
@@ -2472,6 +2721,11 @@ class MIPRetailOptimizerApp:
         
         canvas2 = FigureCanvasTkAgg(fig2, master=self.chart2_canvas_frame)
         canvas2.get_tk_widget().pack(fill="both", expand=True)
+        canvas2.get_tk_widget().bind(
+            "<MouseWheel>",
+            self._scroll_active_view,
+            add=True
+        )
         canvas2.draw()
         canvas2.get_tk_widget().update_idletasks()
         self.chart_canvases.append(canvas2)
@@ -2527,27 +2781,148 @@ class MIPRetailOptimizerApp:
             self.mostrar_toast(f"No se pudo exportar el CSV: {error}", "error", duration=4500)
     
     def crear_excel_ejecutivo(self, file_path):
+        if not self.ultimo_resultado or not self.ultimo_parametros:
+            raise ValueError("No hay un resultado calculado para exportar.")
+
+        result = self.ultimo_resultado
+        params = self.ultimo_parametros
         wb = openpyxl.Workbook()
-        # ... (misma implementación que antes, abreviada por espacio)
+        summary = wb.active
+        if summary is None:
+            raise RuntimeError("No se pudo crear la hoja de resumen.")
+        summary.title = "Resumen"
+        summary.append(["MIP Retail Optimizer"])
+        summary.append(["Indicador", "Resultado"])
+        summary.append(["Estado", result["estado"]])
+        summary.append(["Centros abiertos", ", ".join(result["centros_abiertos"])])
+        summary.append(["Costo baseline (USD/mes)", params["costo_baseline"]])
+        summary.append(["Costo fijo (USD/mes)", result["costo_fijo"]])
+        summary.append(["Costo de transporte (USD/mes)", result["costo_variable"]])
+        summary.append(["Costo total (USD/mes)", result["costo_total"]])
+        summary.append(["Ahorro (USD/mes)", result["ahorro"]])
+        summary.append(["Ahorro (%)", result["porcentaje_ahorro"]])
+        summary["A1"].font = Font(
+            name="Bahnschrift",
+            size=16,
+            bold=True,
+            color="0F172A"
+        )
+        for cell in summary[2]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(
+                fill_type="solid",
+                fgColor="1D4ED8"
+            )
+        summary.column_dimensions["A"].width = 34
+        summary.column_dimensions["B"].width = 28
+        summary.freeze_panes = "A3"
+
+        routes = wb.create_sheet("Asignaciones")
+        routes.append([
+            "Centro",
+            "Zona",
+            "Unidades",
+            "Costo unitario (USD)",
+            "Costo de ruta (USD)",
+            "Demanda atendida (%)"
+        ])
+        for assignment in result["asignaciones"]:
+            center_index = UBICACIONES_DEFAULT.index(assignment["Ubicacion"])
+            zone_index = ZONAS_DEFAULT.index(assignment["Zona"])
+            units = assignment["Cantidad_Enviada"]
+            unit_cost = COSTOS_ENVIO_DEFAULT[center_index][zone_index]
+            demand = params["demandas"][zone_index]
+            routes.append([
+                assignment["Ubicacion"],
+                assignment["Zona"],
+                units,
+                unit_cost,
+                units * unit_cost,
+                units / demand * 100 if demand else 0
+            ])
+        for cell in routes[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(
+                fill_type="solid",
+                fgColor="1D4ED8"
+            )
+        routes.freeze_panes = "A2"
+        routes.auto_filter.ref = routes.dimensions
+        for column, width in zip("ABCDEF", (16, 14, 16, 24, 22, 24)):
+            routes.column_dimensions[column].width = width
         wb.save(file_path)
     
     def toggle_fullscreen(self, event=None):
+        del event
         if sys.platform.startswith("win"):
             self.root.state("normal" if self.root.state() == "zoomed" else "zoomed")
             return
         self.root.attributes("-zoomed", not self.root.attributes("-zoomed"))
     
     def end_fullscreen(self, event=None):
+        del event
         try:
             self.root.state('normal')
         except tk.TclError:
             self.root.attributes('-zoomed', False)
 
 
+def _show_startup_error(root, error):
+    for widget in root.winfo_children():
+        widget.destroy()
+    root.title("MIP Retail Optimizer — error de inicio")
+    root.geometry("700x300")
+    root.configure(fg_color=COLORS["BG_MAIN"])
+
+    card = ctk.CTkFrame(
+        root,
+        fg_color=COLORS["BG_CARD"],
+        corner_radius=14,
+        border_width=2,
+        border_color=COLORS["BORDER"]
+    )
+    card.pack(fill="both", expand=True, padx=24, pady=24)
+    ctk.CTkLabel(
+        card,
+        text="La aplicación no pudo completar el inicio.",
+        font=("Bahnschrift", 20, "bold"),
+        text_color=COLORS["DANGER"]
+    ).pack(anchor="w", padx=24, pady=(24, 8))
+    ctk.CTkLabel(
+        card,
+        text=f"El error quedó registrado en errores.log.\n{error}",
+        font=("Segoe UI", 13),
+        text_color=COLORS["TEXT_SECONDARY"],
+        justify="left",
+        wraplength=600
+    ).pack(anchor="w", padx=24, pady=(0, 20))
+    ctk.CTkButton(
+        card,
+        text="Cerrar",
+        height=38,
+        corner_radius=10,
+        fg_color=COLORS["PRIMARY"],
+        hover_color=COLORS["PRIMARY_HOVER"],
+        command=root.destroy
+    ).pack(anchor="e", padx=24, pady=(0, 20))
+
+
 def main():
-    root = ctk.CTk()
-    app = MIPRetailOptimizerApp(root)
-    root.mainloop()
+    root = None
+    try:
+        root = ctk.CTk()
+        MIPRetailOptimizerApp(root)
+        root.mainloop()
+    except Exception as error:
+        _record_exception(type(error), error, error.__traceback__)
+        if root is None:
+            return
+        try:
+            root.winfo_exists()
+        except tk.TclError:
+            return
+        _show_startup_error(root, error)
+        root.mainloop()
 
 
 if __name__ == "__main__":
