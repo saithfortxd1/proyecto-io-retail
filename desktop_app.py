@@ -24,7 +24,20 @@ from optimizacion import (
 )
 
 
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-3.5-flash-lite"
+FALLBACK_MODEL_NAME = "gemini-3.8-flash"
+
+
+def _is_model_not_found(error: Exception) -> bool:
+    for attribute in ("code", "status", "status_code"):
+        value = getattr(error, attribute, None)
+        if value == 404 or str(value).upper() in {"404", "NOT_FOUND"}:
+            return True
+    response = getattr(error, "response", None)
+    if getattr(response, "status_code", None) == 404:
+        return True
+    message = str(error).upper()
+    return "404" in message and ("NOT_FOUND" in message or "NOT FOUND" in message)
 
 
 def resource_path(*parts: str) -> Path:
@@ -104,6 +117,7 @@ class Api:
     def __init__(self) -> None:
         self._api_key = _load_api_key()
         self._gemini_client = None
+        self._active_model = MODEL_NAME
         self._window = None
 
     def _save_dialog(self, filename: str, file_types: list[str] | tuple[str, ...]) -> str | None:
@@ -375,7 +389,7 @@ class Api:
         )
 
     def estado_asistente(self) -> dict[str, Any]:
-        return {"configured": bool(self._api_key), "model": MODEL_NAME}
+        return {"configured": bool(self._api_key), "model": self._active_model}
 
     def _client(self):
         if not self._api_key:
@@ -395,9 +409,19 @@ class Api:
             temperature=0.3,
             response_mime_type="application/json" if json_response else "text/plain",
         )
-        response = self._client().models.generate_content(
-            model=MODEL_NAME, contents=prompt, config=config
-        )
+        client = self._client()
+        try:
+            response = client.models.generate_content(
+                model=MODEL_NAME, contents=prompt, config=config
+            )
+            self._active_model = MODEL_NAME
+        except Exception as exc:
+            if not _is_model_not_found(exc):
+                raise
+            response = client.models.generate_content(
+                model=FALLBACK_MODEL_NAME, contents=prompt, config=config
+            )
+            self._active_model = FALLBACK_MODEL_NAME
         answer = (response.text or "").strip()
         if not answer:
             raise RuntimeError("Gemini devolvió una respuesta vacía.")
@@ -422,12 +446,12 @@ class Api:
         )
         try:
             answer = self._generate_text(prompt)
-            return {"answer": answer, "model": MODEL_NAME}
+            return {"answer": answer, "model": self._active_model}
         except Exception as exc:
             message = str(exc).strip() or exc.__class__.__name__
             if self._api_key:
                 message = message.replace(self._api_key, "[clave oculta]")
-            return {"answer": f"Error al consultar Gemini: {message}", "model": MODEL_NAME}
+            return {"answer": f"Error al consultar Gemini: {message}", "model": self._active_model}
 
     def generar_tutorial(self) -> dict[str, Any]:
         prompt = (

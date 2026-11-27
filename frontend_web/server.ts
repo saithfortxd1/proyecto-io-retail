@@ -21,7 +21,45 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = 3000;
-const GEMINI_MODEL = 'gemini-4-hydrogen';
+const GEMINI_MODEL = 'gemini-3.5-flash-lite';
+const GEMINI_FALLBACK_MODEL = 'gemini-3.8-flash';
+
+function isModelNotFound(error: unknown): boolean {
+  if (typeof error === 'object' && error !== null) {
+    const details = error as {
+      code?: unknown;
+      status?: unknown;
+      statusCode?: unknown;
+      response?: { status?: unknown; statusCode?: unknown };
+    };
+    const statuses = [
+      details.code,
+      details.status,
+      details.statusCode,
+      details.response?.status,
+      details.response?.statusCode,
+    ];
+    if (statuses.some((status) => status === 404 || String(status).toUpperCase() === 'NOT_FOUND')) {
+      return true;
+    }
+  }
+  const message = error instanceof Error ? error.message.toUpperCase() : String(error).toUpperCase();
+  return message.includes('404') && (message.includes('NOT_FOUND') || message.includes('NOT FOUND'));
+}
+
+async function generateContentWithFallback<T>(
+  generate: (model: string) => Promise<T>
+): Promise<{ response: T; model: string }> {
+  try {
+    return { response: await generate(GEMINI_MODEL), model: GEMINI_MODEL };
+  } catch (error) {
+    if (!isModelNotFound(error)) throw error;
+    return {
+      response: await generate(GEMINI_FALLBACK_MODEL),
+      model: GEMINI_FALLBACK_MODEL,
+    };
+  }
+}
 
 function sanitizeAssistantResponse(answer: string): string {
   return answer
@@ -117,13 +155,15 @@ async function startServer() {
         parts: [{ text: userPrompt }],
       });
 
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents,
-        config: {
-          systemInstruction: AI_SYSTEM_INSTRUCTION,
-        },
-      });
+      const { response, model } = await generateContentWithFallback((model) =>
+        ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            systemInstruction: AI_SYSTEM_INSTRUCTION,
+          },
+        })
+      );
 
       const rawText = response.text;
       if (!rawText) {
@@ -133,7 +173,7 @@ async function startServer() {
 
       res.json({
         answer: sanitizeAssistantResponse(rawText),
-        model: GEMINI_MODEL,
+        model,
       });
     } catch (error) {
       const rawMessage =
@@ -155,28 +195,30 @@ async function startServer() {
 
     try {
       const ai = createGeminiClient(apiKey);
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents:
+      const { response, model } = await generateContentWithFallback((model) =>
+        ai.models.generateContent({
+          model,
+          contents:
           'Genera un recorrido guiado tipo spotlight en 5 pasos MUY breves y directos en español para MIP Retail Optimizer Enterprise. Cada "summary" debe tener máximo 18 palabras y cada "tip" máximo 12 palabras (sin texto largo). Cubre en orden: (1) Escenario y carga CSV/Excel en Dashboard, (2) Botón Ejecutar Optimización MIP ($243,000 USD vs $182,500 USD, ahorro $60,500 USD / 24.90%), (3) Gráficas e Informe IA debajo de cada gráfica, (4) Exportar PDF con mapa y Matriz de Rutas, (5) Asistente Rápido IA y Manual. Sin Markdown.',
-        config: {
-          systemInstruction: AI_SYSTEM_INSTRUCTION,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                section: { type: Type.STRING },
-                title: { type: Type.STRING },
-                summary: { type: Type.STRING },
-                tip: { type: Type.STRING },
+          config: {
+            systemInstruction: AI_SYSTEM_INSTRUCTION,
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  section: { type: Type.STRING },
+                  title: { type: Type.STRING },
+                  summary: { type: Type.STRING },
+                  tip: { type: Type.STRING },
+                },
+                required: ['section', 'title', 'summary', 'tip'],
               },
-              required: ['section', 'title', 'summary', 'tip'],
             },
           },
-        },
-      });
+        })
+      );
 
       const parsed = JSON.parse((response.text ?? '[]').trim()) as Array<{
         section: string;
@@ -193,7 +235,7 @@ async function startServer() {
         tip: sanitizeAssistantResponse(item.tip),
       }));
 
-      res.json({ steps: cleanSteps, model: GEMINI_MODEL });
+      res.json({ steps: cleanSteps, model });
     } catch (error) {
       const rawMessage =
         error instanceof Error ? error.message : 'Error generando tutorial con Gemini.';
@@ -263,28 +305,30 @@ async function startServer() {
 
     try {
       const ai = createGeminiClient(apiKey);
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: `Analiza los cambios entre el escenario anterior y el nuevo escenario optimizado y genera dos informes claros y concisos para mostrar debajo de cada gráfica en el Dashboard.
+      const { response, model } = await generateContentWithFallback((model) =>
+        ai.models.generateContent({
+          model,
+          contents: `Analiza los cambios entre el escenario anterior y el nuevo escenario optimizado y genera dos informes claros y concisos para mostrar debajo de cada gráfica en el Dashboard.
 1) costImpactReport (debajo de la gráfica Comparativa Baseline vs. Optimizado): explica en 2-3 oraciones cómo afectaron los cambios de parámetros al costo fijo, al costo de transporte, al costo total óptimo y al ahorro mensual/anual frente al baseline, citando las cifras exactas con signo $, comas, puntos decimales y %.
 2) capacityImpactReport (debajo de la gráfica Utilización de Capacidad L1–L4): explica en 2-3 oraciones qué centros quedaron abiertos o cerrados, cómo cambió el porcentaje de utilización de L1–L4 y qué implicación operativa tiene para que cualquier usuario entienda qué está pasando.
 PROHIBIDO usar Markdown (**, #, \`\`).
 
 Datos exactos del escenario:
 ${JSON.stringify(payloadSummary)}`,
-        config: {
-          systemInstruction: AI_SYSTEM_INSTRUCTION,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              costImpactReport: { type: Type.STRING },
-              capacityImpactReport: { type: Type.STRING },
+          config: {
+            systemInstruction: AI_SYSTEM_INSTRUCTION,
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                costImpactReport: { type: Type.STRING },
+                capacityImpactReport: { type: Type.STRING },
+              },
+              required: ['costImpactReport', 'capacityImpactReport'],
             },
-            required: ['costImpactReport', 'capacityImpactReport'],
           },
-        },
-      });
+        })
+      );
 
       const parsed = JSON.parse((response.text ?? '{}').trim()) as {
         costImpactReport?: string;
@@ -294,7 +338,7 @@ ${JSON.stringify(payloadSummary)}`,
       res.json({
         costImpactReport: sanitizeAssistantResponse(parsed.costImpactReport ?? ''),
         capacityImpactReport: sanitizeAssistantResponse(parsed.capacityImpactReport ?? ''),
-        model: GEMINI_MODEL,
+        model,
       });
     } catch (error) {
       const rawMessage =

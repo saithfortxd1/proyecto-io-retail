@@ -76,12 +76,12 @@ export async function checkAssistantStatus(): Promise<AssistantStatusResult> {
       return { ...(await api.estado_asistente()), source: 'pywebview' };
     } catch {
       if (isDesktopShell()) {
-        return { configured: false, model: 'gemini-2.5-flash', source: 'pywebview' };
+        return { configured: false, model: 'gemini-3.5-flash-lite', source: 'pywebview' };
       }
     }
   }
   if (isDesktopShell()) {
-    return { configured: false, model: 'gemini-2.5-flash', source: 'pywebview' };
+    return { configured: false, model: 'gemini-3.5-flash-lite', source: 'pywebview' };
   }
   try {
     const res = await fetch('/api/assistant/status');
@@ -90,7 +90,7 @@ export async function checkAssistantStatus(): Promise<AssistantStatusResult> {
       const data = (await res.json()) as { configured?: boolean; model?: string };
       return {
         configured: Boolean(data.configured),
-        model: data.model ?? 'gemini-4-hydrogen',
+        model: data.model ?? 'gemini-3.5-flash-lite',
         source: 'server',
       };
     }
@@ -100,7 +100,7 @@ export async function checkAssistantStatus(): Promise<AssistantStatusResult> {
 
   return {
     configured: false,
-    model: 'gemini-4-hydrogen',
+    model: 'gemini-3.5-flash-lite',
     source: 'server',
   };
 }
@@ -154,7 +154,7 @@ export async function sendAssistantQuestion(
 
   return {
     answer: sanitizeAssistantResponse(data.answer),
-    model: data.model ?? 'gemini-4-hydrogen',
+    model: data.model ?? 'gemini-3.5-flash-lite',
   };
 }
 

@@ -32,6 +32,19 @@ load_dotenv(os.path.join(APP_DIR, ".env"))
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = "gemini-3.5-flash-lite"
+GEMINI_FALLBACK_MODEL = "gemini-3.8-flash"
+
+
+def _is_gemini_model_not_found(error):
+    for attribute in ("code", "status", "status_code"):
+        value = getattr(error, attribute, None)
+        if value == 404 or str(value).upper() in {"404", "NOT_FOUND"}:
+            return True
+    response = getattr(error, "response", None)
+    if getattr(response, "status_code", None) == 404:
+        return True
+    message = str(error).upper()
+    return "404" in message and ("NOT_FOUND" in message or "NOT FOUND" in message)
 AI_SYSTEM_INSTRUCTION = """
 Eres el asistente de MIP Retail Optimizer, una herramienta de apoyo a decisiones
 logísticas. Responde en español, con claridad y rigor; distingue los resultados
@@ -2052,28 +2065,40 @@ class MIPRetailOptimizerApp:
                     parts=[genai.types.Part(text=f"{question}\n\n{context}")]
                 )
             )
+            used_model = GEMINI_MODEL
             try:
-                response = client.models.generate_content(
-                    model=GEMINI_MODEL,
-                    contents=contents,
-                    config=genai.types.GenerateContentConfig(
-                        system_instruction=AI_SYSTEM_INSTRUCTION
-                    )
+                config = genai.types.GenerateContentConfig(
+                    system_instruction=AI_SYSTEM_INSTRUCTION
                 )
+                try:
+                    response = client.models.generate_content(
+                        model=GEMINI_MODEL,
+                        contents=contents,
+                        config=config,
+                    )
+                except Exception as error:
+                    if not _is_gemini_model_not_found(error):
+                        raise
+                    used_model = GEMINI_FALLBACK_MODEL
+                    response = client.models.generate_content(
+                        model=GEMINI_FALLBACK_MODEL,
+                        contents=contents,
+                        config=config,
+                    )
                 answer = response.text
             finally:
                 client.close()
             if not answer:
-                raise RuntimeError("Gemini devolvió una respuesta vacía.")
-            self.root.after(0, self._finish_gemini_request, answer, None, question)
+                raise RuntimeError("Gemini returned an empty response.")
+            self.root.after(0, self._finish_gemini_request, answer, None, question, used_model)
         except Exception as error:
             message = str(error).replace(api_key, "[clave oculta]")
             try:
-                self.root.after(0, self._finish_gemini_request, None, message, question)
+                self.root.after(0, self._finish_gemini_request, None, message, question, GEMINI_MODEL)
             except (RuntimeError, tk.TclError):
                 return
 
-    def _finish_gemini_request(self, answer, error, question):
+    def _finish_gemini_request(self, answer, error, question, model=GEMINI_MODEL):
         if error:
             self.chat_status.configure(text="No se pudo completar la consulta.")
             answer = f"No fue posible consultar Gemini: {error}"
@@ -2085,7 +2110,7 @@ class MIPRetailOptimizerApp:
                 {"role": "model", "text": answer},
             ])
             self.chat_conversation = self.chat_conversation[-12:]
-            self.chat_status.configure(text=f"Respuesta recibida de {GEMINI_MODEL}.")
+            self.chat_status.configure(text=f"Respuesta recibida de {model}.")
 
         answer = self._sanitize_assistant_response(answer)
         assistant_message = "Asistente: " + answer
