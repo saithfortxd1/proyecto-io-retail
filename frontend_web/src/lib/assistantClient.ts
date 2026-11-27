@@ -21,15 +21,28 @@ function desktopApi() {
   return typeof window !== 'undefined' ? window.pywebview?.api : undefined;
 }
 
-function isDesktopShell(): boolean {
+export function isDesktopShell(): boolean {
   return typeof window !== 'undefined' &&
-    (Boolean(window.pywebview) || window.location.protocol === 'file:');
+    (window.pywebview !== undefined || window.location.protocol === 'file:');
 }
 
-async function desktopApiWhenReady() {
+type DesktopAssistantMethod =
+  | 'estado_asistente'
+  | 'consultar_asistente'
+  | 'generar_tutorial'
+  | 'analizar_impacto_graficos';
+
+function hasDesktopMethod(
+  api: ReturnType<typeof desktopApi>,
+  method: DesktopAssistantMethod
+): boolean {
+  return typeof (api as unknown as Record<string, unknown> | undefined)?.[method] === 'function';
+}
+
+async function desktopApiWhenReady(method: DesktopAssistantMethod) {
   if (typeof window === 'undefined') return undefined;
   const initialApi = desktopApi();
-  if (initialApi) return initialApi;
+  if (hasDesktopMethod(initialApi, method)) return initialApi;
   if (!isDesktopShell()) return undefined;
 
   await new Promise<void>((resolve) => {
@@ -41,15 +54,11 @@ async function desktopApiWhenReady() {
       window.removeEventListener('pywebviewready', finish);
       resolve();
     };
-    const timeoutId = window.setTimeout(finish, 5000);
+    const timeoutId = window.setTimeout(finish, 10000);
     window.addEventListener('pywebviewready', finish, { once: true });
   });
-  return desktopApi();
-}
-
-async function desktopChatApiWhenReady() {
-  const readyApi = await desktopApiWhenReady();
-  return typeof readyApi?.consultar_asistente === 'function' ? readyApi : undefined;
+  const readyApi = desktopApi();
+  return hasDesktopMethod(readyApi, method) ? readyApi : undefined;
 }
 
 export function sanitizeAssistantResponse(answer: string): string {
@@ -61,12 +70,14 @@ export function sanitizeAssistantResponse(answer: string): string {
 }
 
 export async function checkAssistantStatus(): Promise<AssistantStatusResult> {
-  const api = await desktopApiWhenReady();
+  const api = await desktopApiWhenReady('estado_asistente');
   if (api?.estado_asistente) {
     try {
       return { ...(await api.estado_asistente()), source: 'pywebview' };
     } catch {
-      if (isDesktopShell()) return { configured: false, model: 'gemini-2.5-flash', source: 'pywebview' };
+      if (isDesktopShell()) {
+        return { configured: false, model: 'gemini-2.5-flash', source: 'pywebview' };
+      }
     }
   }
   if (isDesktopShell()) {
@@ -99,7 +110,7 @@ export async function sendAssistantQuestion(
   context: string,
   priorTurns: ChatTurn[]
 ): Promise<AssistantQueryResult> {
-  const api = await desktopChatApiWhenReady();
+  const api = await desktopApiWhenReady('consultar_asistente');
   if (api?.consultar_asistente) {
     const result = await api.consultar_asistente({
       question,
@@ -156,7 +167,7 @@ const TARGET_VIEWS: ViewId[] = [
 ];
 
 export async function fetchGeminiTutorialSteps(): Promise<TutorialStep[]> {
-  const api = desktopApi();
+  const api = await desktopApiWhenReady('generar_tutorial');
   if (api?.generar_tutorial) {
     const result = await api.generar_tutorial();
     if (!Array.isArray(result?.steps) || result.steps.length === 0) {
@@ -166,6 +177,10 @@ export async function fetchGeminiTutorialSteps(): Promise<TutorialStep[]> {
       ...step,
       targetView: TARGET_VIEWS[idx] ?? 'dashboard',
     }));
+  }
+
+  if (isDesktopShell()) {
+    throw new Error('El puente nativo del asistente no está disponible. Reinicia la aplicación.');
   }
 
   const res = await fetch('/api/assistant/tutorial', {
@@ -205,7 +220,7 @@ export async function fetchChartImpactReport(
   currentParams: ScenarioParameters,
   currentResult: OptimizationResult
 ): Promise<{ costImpactReport: string; capacityImpactReport: string }> {
-  const api = desktopApi();
+  const api = await desktopApiWhenReady('analizar_impacto_graficos');
   if (api?.analizar_impacto_graficos) {
     const result = await api.analizar_impacto_graficos({
       previousParams,
@@ -220,6 +235,10 @@ export async function fetchChartImpactReport(
       costImpactReport: sanitizeAssistantResponse(result.costImpactReport),
       capacityImpactReport: sanitizeAssistantResponse(result.capacityImpactReport),
     };
+  }
+
+  if (isDesktopShell()) {
+    throw new Error('El puente nativo del asistente no está disponible. Reinicia la aplicación.');
   }
 
   const res = await fetch('/api/assistant/chart-impact', {

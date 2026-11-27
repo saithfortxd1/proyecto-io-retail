@@ -20,6 +20,7 @@ import {
   checkAssistantStatus,
   fetchChartImpactReport,
   fetchGeminiTutorialSteps,
+  isDesktopShell,
   sendAssistantQuestion,
 } from './lib/assistantClient.ts';
 import { resolverEscenarioConPuente, resolverModelo } from './lib/mipSolver.ts';
@@ -221,7 +222,7 @@ export default function App() {
 
   const loadGeminiTutorialIfNeeded = useCallback(async () => {
     if (tutorialEnhanced || tutorialLoading) return;
-    if (assistantConfigured === false) {
+    if (assistantConfigured === false && !isDesktopShell()) {
       setTutorialError('Gemini no está configurado (GEMINI_API_KEY).');
       return;
     }
@@ -463,7 +464,7 @@ export default function App() {
     };
     setChatMessages((prev) => [...prev, userMsg]);
 
-    if (assistantConfigured === false) {
+    if (assistantConfigured === false && !isDesktopShell()) {
       setChatMessages((prev) => [
         ...prev,
         {
@@ -475,7 +476,7 @@ export default function App() {
               : 'Gemini no está disponible en este momento. La optimización matemática y las demás vistas siguen funcionando normalmente.',
         },
       ]);
-      notify('Falta GEMINI_API_KEY en Secretos o .env.', 'info');
+      notify('Gemini no está configurado para esta sesión web.', 'info');
       return;
     }
 
