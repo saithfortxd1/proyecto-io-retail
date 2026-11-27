@@ -1,10 +1,11 @@
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, filedialog
 import pandas as pd
 import os
 import json
 import sys
+import re
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -15,7 +16,6 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 import threading
 import time
-from tkinter import simpledialog
 from dotenv import load_dotenv
 from google import genai
 
@@ -36,9 +36,13 @@ GEMINI_MODEL = "gemini-3.5-flash-lite"
 AI_SYSTEM_INSTRUCTION = """
 Eres el asistente de MIP Retail Optimizer, una herramienta de apoyo a decisiones
 logísticas. Responde en español, con claridad y rigor; distingue los resultados
-oficiales del informe de los escenarios dinámicos que el usuario comparta. No
-inventes datos, no afirmes que una recomendación reemplaza la validación del
-modelo PuLP/CBC y advierte si un escenario cambia la solución.
+oficiales del informe de los escenarios dinámicos que el usuario comparta. Usa
+solo datos del proyecto y del escenario actual; no inventes cifras ni resultados.
+
+Responde en español claro, directo y conversacional, en máximo 2 o 3 párrafos
+cortos. PROHIBIDO usar sintaxis Markdown como asteriscos (**), almohadillas (#)
+o bloques de código. No agregues notas de validación ni advertencias genéricas;
+cíñete exclusivamente a los datos del proyecto y al escenario actual del usuario.
 
 CONTEXTO COMPLETO DEL INFORME TÉCNICO
 Objetivo: minimizar el costo mensual fijo de apertura más el costo variable de
@@ -99,7 +103,7 @@ MANUAL DEL SOFTWARE
 El Dashboard muestra escenario, parámetros, KPIs, comparativa de costos y
 utilización de capacidad. Los campos inician en modo protegido. Para simular,
 habilita edición, cambia costos fijos/capacidades/demandas/máximo de centros/
-baseline, confirma y ejecuta la optimización; Restaurar Base vuelve al caso
+baseline, guarda los cambios y ejecuta la optimización; Restaurar Base vuelve al caso
 oficial. La matriz presenta las asignaciones y permite exportar CSV/Excel.
 Los costos de envío permanecen en la matriz oficial y no tienen controles de
 edición en la versión actual. La navegación lateral abre Dashboard, Matriz,
@@ -161,9 +165,10 @@ class MIPRetailOptimizerApp:
         self.root.minsize(1366, 768)
         
         # Pantalla completa
-        try:
-            self.root.state('zoomed')
-        except:
+        if sys.platform.startswith("win"):
+            self.root.state("zoomed")
+            self.root.after(0, self.root.state, "zoomed")
+        else:
             self.root.attributes('-zoomed', True)
         
         self.root.bind('<F11>', self.toggle_fullscreen)
@@ -184,6 +189,18 @@ class MIPRetailOptimizerApp:
         self.api_key = self._load_api_key()
         self.chat_busy = False
         self.chat_conversation = []
+        self.chat_messages = []
+        self.chat_surfaces = []
+        self.chat_label_histories: dict[ctk.CTkLabel, ctk.CTkScrollableFrame] = {}
+        self.chat_typing_job = None
+        self.chat_thinking_job = None
+        self.quick_questions_hidden = False
+        self.saved_parameters = None
+        self.optimization_busy = False
+        self.optimization_request_id = 0
+        self.solver_thread = None
+        self.toast_frame = None
+        self.toast_after_id = None
         self.chart_canvases = []
         self.scroll_frames = {}
         
@@ -191,8 +208,10 @@ class MIPRetailOptimizerApp:
         self.setup_styles()
         self.build_layout()
         self.cargar_valores_iniciales()
+        self.saved_parameters = self.leer_parametros_ui()
         self.bloquear_campos()
-        self.load_csv_data()
+        self.build_floating_chat()
+        self.root.after(0, self.load_csv_data)
 
     def _create_button(self, master, **kwargs):
         kwargs["height"] = max(38, kwargs.get("height", 38))
@@ -201,16 +220,128 @@ class MIPRetailOptimizerApp:
         kwargs.setdefault("border_color", COLORS["BORDER"])
         return ctk.CTkButton(master, **kwargs)
 
+    def mostrar_toast(self, message, kind="success", duration=2800):
+        palette = {
+            "success": (COLORS["SUCCESS"], "#FFFFFF"),
+            "error": (COLORS["DANGER"], "#FFFFFF"),
+            "info": (COLORS["PRIMARY"], "#FFFFFF"),
+            "warning": (COLORS["WARNING"], "#FFFFFF"),
+        }
+        background, foreground = palette.get(kind, palette["info"])
+        if self.toast_after_id:
+            self.root.after_cancel(self.toast_after_id)
+            self.toast_after_id = None
+        if self.toast_frame and self.toast_frame.winfo_exists():
+            self.toast_frame.destroy()
+
+        self.toast_frame = ctk.CTkFrame(
+            self.root,
+            fg_color=background,
+            corner_radius=12,
+            border_width=1,
+            border_color=background
+        )
+        ctk.CTkLabel(
+            self.toast_frame,
+            text=message,
+            font=self.fonts["body"],
+            text_color=foreground,
+            justify="left",
+            wraplength=420
+        ).pack(padx=18, pady=12)
+        self.toast_frame.place(relx=1, rely=1, x=-24, y=-78, anchor="se")
+        self.toast_frame.lift()
+        self.toast_after_id = self.root.after(duration, self._dismiss_toast)
+
+    def _dismiss_toast(self):
+        self.toast_after_id = None
+        if self.toast_frame and self.toast_frame.winfo_exists():
+            self.toast_frame.destroy()
+        self.toast_frame = None
+
+    def confirmar_accion(self, title, message, confirm_text="Confirmar"):
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title(title)
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.configure(fg_color=COLORS["BG_MAIN"])
+        dialog.update_idletasks()
+        width, height = 440, 230
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+        result = {"confirmed": False}
+        card = ctk.CTkFrame(
+            dialog,
+            fg_color=COLORS["BG_CARD"],
+            corner_radius=14,
+            border_width=2,
+            border_color=COLORS["BORDER"]
+        )
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(
+            card,
+            text=title,
+            font=self.fonts["section"],
+            text_color=COLORS["TEXT_PRIMARY"]
+        ).pack(anchor="w", padx=22, pady=(20, 8))
+        ctk.CTkLabel(
+            card,
+            text=message,
+            font=self.fonts["body"],
+            text_color=COLORS["TEXT_SECONDARY"],
+            justify="left",
+            wraplength=370
+        ).pack(anchor="w", padx=22, pady=(0, 14))
+        actions = ctk.CTkFrame(card, fg_color="transparent")
+        actions.pack(fill="x", padx=18, pady=(0, 14))
+        self._create_button(
+            actions,
+            text="Cancelar",
+            font=self.fonts["button"],
+            fg_color="#F1F5F9",
+            hover_color="#E2E8F0",
+            text_color=COLORS["TEXT_SECONDARY"],
+            command=dialog.destroy
+        ).pack(side="right", padx=(8, 0))
+
+        def confirm():
+            result["confirmed"] = True
+            dialog.destroy()
+
+        self._create_button(
+            actions,
+            text=confirm_text,
+            font=self.fonts["button"],
+            fg_color=COLORS["PRIMARY"],
+            hover_color=COLORS["PRIMARY_HOVER"],
+            command=confirm
+        ).pack(side="right")
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        dialog.grab_set()
+        dialog.focus_force()
+        self.root.wait_window(dialog)
+        return result["confirmed"]
+
     def _scroll_active_view(self, event):
         scroll_frame = self.scroll_frames.get(self.current_view)
         if scroll_frame is None or not scroll_frame.winfo_exists():
             return
 
+        if self.floating_chat_panel.winfo_manager():
+            widget = event.widget
+            while widget is not None:
+                if widget == self.floating_chat_panel:
+                    scroll_frame = self.floating_chat_history
+                    break
+                widget = getattr(widget, "master", None)
+
         delta = event.delta
         if not delta:
             return
 
-        units = int(-delta / 6) if sys.platform.startswith("win") else int(-delta)
+        units = int(-delta / 30) if sys.platform.startswith("win") else int(-delta)
         if units == 0:
             units = -1 if delta > 0 else 1
         scroll_frame._parent_canvas.yview_scroll(units, "units")
@@ -288,16 +419,44 @@ class MIPRetailOptimizerApp:
         # Logo en sidebar
         logo_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         logo_frame.pack(fill="x", padx=20, pady=(24, 16))
-        
-        ctk.CTkLabel(
+
+        logo_mark = tk.Canvas(
             logo_frame,
-            text="MIP Retail Optimizer™",
-            font=self.fonts["logo"],
-            text_color=COLORS["TEXT_WHITE"]
+            width=38,
+            height=38,
+            bg=COLORS["BG_SIDEBAR"],
+            highlightthickness=0
+        )
+        logo_mark.pack(side="left", padx=(0, 9))
+        logo_mark.create_line(7, 19, 18, 7, fill="#3B82F6", width=2)
+        logo_mark.create_line(18, 7, 29, 19, fill="#3B82F6", width=2)
+        logo_mark.create_line(29, 19, 18, 31, fill="#3B82F6", width=2)
+        logo_mark.create_line(18, 31, 7, 19, fill="#3B82F6", width=2)
+        logo_mark.create_line(7, 19, 29, 19, fill="#34D399", width=1.5)
+        for x, y, color in (
+            (7, 19, "#34D399"),
+            (18, 7, "#60A5FA"),
+            (29, 19, "#34D399"),
+            (18, 31, "#60A5FA"),
+            (18, 19, "#FFFFFF"),
+        ):
+            radius = 4 if (x, y) == (18, 19) else 3
+            logo_mark.create_oval(
+                x - radius, y - radius, x + radius, y + radius,
+                fill=color, outline=COLORS["BG_SIDEBAR"]
+            )
+
+        logo_text = ctk.CTkFrame(logo_frame, fg_color="transparent")
+        logo_text.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(
+            logo_text,
+            text="MIP Retail\nOptimizer™",
+            font=("Bahnschrift", 15, "bold"),
+            text_color=COLORS["TEXT_WHITE"],
+            justify="left"
         ).pack(anchor="w")
-        
         ctk.CTkLabel(
-            logo_frame,
+            logo_text,
             text="Enterprise",
             font=("Segoe UI", 10, "bold"),
             text_color=COLORS["SUCCESS"]
@@ -385,6 +544,120 @@ class MIPRetailOptimizerApp:
                 btn.configure(fg_color=COLORS["BG_SIDEBAR_HOVER"], text_color=COLORS["TEXT_WHITE"])
             else:
                 btn.configure(fg_color="transparent", text_color=COLORS["TEXT_WHITE"])
+        if hasattr(self, "floating_chat_button"):
+            self._sync_floating_chat_visibility()
+
+    def build_floating_chat(self):
+        self.floating_chat_panel = ctk.CTkFrame(
+            self.root,
+            width=380,
+            height=500,
+            fg_color=COLORS["BG_CARD"],
+            corner_radius=14,
+            border_width=2,
+            border_color=COLORS["BORDER"]
+        )
+        self.floating_chat_panel.grid_propagate(False)
+
+        header = ctk.CTkFrame(
+            self.floating_chat_panel,
+            fg_color=COLORS["BG_SIDEBAR"],
+            corner_radius=10
+        )
+        header.pack(fill="x", padx=8, pady=8)
+        ctk.CTkLabel(
+            header,
+            text="💬 Asistente Rápido",
+            font=self.fonts["subsection"],
+            text_color=COLORS["TEXT_WHITE"]
+        ).pack(side="left", padx=12, pady=10)
+        self._create_button(
+            header,
+            text="🔑",
+            width=34,
+            height=34,
+            fg_color="transparent",
+            hover_color=COLORS["BG_SIDEBAR_HOVER"],
+            text_color=COLORS["TEXT_WHITE"],
+            command=self.configurar_api_key
+        ).pack(side="right", padx=(0, 4), pady=4)
+        self._create_button(
+            header,
+            text="×",
+            width=34,
+            height=34,
+            font=self.fonts["section"],
+            fg_color="transparent",
+            hover_color=COLORS["BG_SIDEBAR_HOVER"],
+            text_color=COLORS["TEXT_WHITE"],
+            command=self._toggle_floating_chat
+        ).pack(side="right", padx=6, pady=4)
+
+        self.floating_chat_history = ctk.CTkScrollableFrame(
+            self.floating_chat_panel,
+            fg_color="#F8FAFC",
+            corner_radius=8
+        )
+        self.floating_chat_history.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        input_frame = ctk.CTkFrame(self.floating_chat_panel, fg_color="transparent")
+        input_frame.pack(fill="x", padx=10, pady=(0, 10))
+        input_frame.grid_columnconfigure(0, weight=1)
+        self.floating_chat_input = ctk.CTkEntry(
+            input_frame,
+            height=40,
+            font=self.fonts["body_small"],
+            placeholder_text="Pregunta sobre este escenario..."
+        )
+        self.floating_chat_input.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.floating_chat_send_button = self._create_button(
+            input_frame,
+            text="Enviar",
+            width=74,
+            height=40,
+            font=self.fonts["button_small"],
+            command=lambda: self.enviar_mensaje_asistente(source="floating")
+        )
+        self.floating_chat_send_button.grid(row=0, column=1)
+        self.floating_chat_input.bind(
+            "<Return>",
+            lambda _event: self.enviar_mensaje_asistente(source="floating")
+        )
+        self._register_chat_surface(
+            self.floating_chat_history,
+            self.floating_chat_send_button
+        )
+
+        self.floating_chat_button = self._create_button(
+            self.root,
+            text="💬 Asistente Rápido",
+            font=self.fonts["button"],
+            width=190,
+            height=44,
+            fg_color=COLORS["PRIMARY"],
+            hover_color=COLORS["PRIMARY_HOVER"],
+            command=self._toggle_floating_chat
+        )
+        self._sync_floating_chat_visibility()
+
+    def _sync_floating_chat_visibility(self):
+        if self.current_view in {"dashboard", "matrix", "manual"}:
+            if not self.floating_chat_button.winfo_manager():
+                self.floating_chat_button.place(
+                    relx=1, rely=1, x=-24, y=-18, anchor="se"
+                )
+        else:
+            self.floating_chat_button.place_forget()
+            self.floating_chat_panel.place_forget()
+
+    def _toggle_floating_chat(self):
+        if self.floating_chat_panel.winfo_manager():
+            self.floating_chat_panel.place_forget()
+            return
+        self.floating_chat_panel.place(
+            relx=1, rely=1, x=-20, y=-72, anchor="se"
+        )
+        self.floating_chat_panel.lift()
+        self.floating_chat_input.focus_set()
         
     # ========================================================
     # VISTA 1: DASHBOARD Y SIMULACIÓN
@@ -510,6 +783,28 @@ class MIPRetailOptimizerApp:
             command=self.habilitar_edicion
         )
         self.btn_edit.pack(side="left", padx=4)
+
+        self.btn_save = self._create_button(
+            toolbar,
+            text="💾 Guardar Cambios",
+            font=self.fonts["button"],
+            height=40,
+            width=165,
+            fg_color=COLORS["SUCCESS"],
+            hover_color=COLORS["SUCCESS_HOVER"],
+            command=self.guardar_cambios
+        )
+        self.btn_cancel_edit = self._create_button(
+            toolbar,
+            text="✖ Cancelar Edición",
+            font=self.fonts["button"],
+            height=40,
+            width=150,
+            fg_color="#F1F5F9",
+            hover_color="#E2E8F0",
+            text_color=COLORS["TEXT_SECONDARY"],
+            command=self.cancelar_edicion
+        )
         
         self.btn_restore = self._create_button(
             toolbar,
@@ -910,80 +1205,121 @@ class MIPRetailOptimizerApp:
         frame = self.views["manual"]
         frame.grid_rowconfigure(0, weight=1)
         frame.grid_columnconfigure(0, weight=1)
-        
+
         scroll = ctk.CTkScrollableFrame(frame, fg_color=COLORS["BG_MAIN"], corner_radius=0)
         self.scroll_frames["manual"] = scroll
         scroll.grid(row=0, column=0, sticky="nsew", padx=24, pady=24)
         scroll.grid_columnconfigure(0, weight=1)
-        
-        # Contenido del manual
-        manual_sections = [
-            ("🎯 Bienvenido a MIP Retail Optimizer™ Enterprise",
-             "Este sistema resuelve el Problema de Localización de Centros de Distribución (CFLP) "
-             "mediante Programación Entera Mixta (MIP). Determina qué centros abrir (de 4 candidatos) "
-             "y cómo asignar la demanda de 6 zonas para minimizar el costo logístico total.\n\n"
-             "El motor matemático usa PuLP + CBC (Coin-or Branch and Cut), garantizando optimalidad global "
-             "en <0.1 segundos."),
-            
-            ("🏢 Parámetros - Centros de Distribución (4 candidatos)",
-             "• L1: Costo fijo $45,000 | Capacidad 15,000 u/mes\n"
-             "• L2: Costo fijo $50,000 | Capacidad 20,000 u/mes  ← ÓPTIMO\n"
-             "• L3: Costo fijo $38,000 | Capacidad 12,000 u/mes  ← ÓPTIMO\n"
-             "• L4: Costo fijo $42,000 | Capacidad 16,000 u/mes\n\n"
-             "Los costos fijos se pagan solo si el centro se abre (variable binaria yᵢ). "
-             "La capacidad máxima limita el flujo total saliente."),
-            
-            ("📍 Parámetros - Demandas por Zona (6 zonas)",
-             "• Z1: 3,000  • Z2: 4,000  • Z3: 5,000\n"
-             "• Z4: 3,500  • Z5: 2,500  • Z6: 4,000\n\n"
-             "Total: 22,000 unidades/mes. La demanda DEBE satisfacerse exactamente (restricción de igualdad)."),
-            
-            ("📏 Restricciones del Modelo",
-             "1. **Demanda exacta**: Σᵢ xᵢⱼ = dⱼ  ∀j  (cada zona recibe exactamente su demanda)\n"
-             "2. **Capacidad ligada**: Σⱼ xᵢⱼ ≤ Kᵢ·yᵢ  ∀i  (si yᵢ=0 → xᵢⱼ=0; si yᵢ=1 → ≤ capacidad)\n"
-             "3. **Máximo 2 centros**: Σᵢ yᵢ ≤ 2  (política de racionalización de activos)\n\n"
-             "Como la demanda total (22,000) supera la capacidad del mayor centro (20,000 en L2), "
-             "el modelo DEBE abrir exactamente 2 centros."),
-            
-            ("🧮 Algoritmo: Branch-and-Bound con CBC",
-             "El solver CBC (Coin-or Branch and Cut) resuelve la relajación lineal y ramifica sobre "
-             "las variables binarias hasta garantizar la solución óptima global. "
-             "Para este problema (28 variables, 11 restricciones, 4 binarias):\n"
-             "• Tiempo típico: < 0.1 segundos\n"
-             "• Iteraciones típicas: ~111\n"
-             "• Optimalidad garantizada (gap = 0%)\n"
-             "• 0 nodos enumerados (solución entera encontrada en relajación)"),
-            
-            ("📊 Interpretación de Resultados",
-             "• **Costo Fijo**: Suma de costos de apertura de centros abiertos ($88,000 = L2 $50K + L3 $38K)\n"
-             "• **Costo Variable**: Suma de flujo × costo unitario de transporte ($94,500)\n"
-             "• **Costo Total**: $182,500 (vs $243,000 baseline = ahorro $60,500 / 24.90%)\n"
-             "• **Asignación óptima**: L2 atiende Z1-Z3 (12,000 u), L3 atiende Z4-Z6 (10,000 u)\n"
-             "• **Utilización**: L2 al 60% (12,000/20,000), L3 al 83.3% (10,000/12,000)"),
-            
-            ("🔧 Cómo Usar la Aplicación",
-             "1. **Modo Protegido (default)**: Los parámetros están bloqueados mostrando el caso base oficial.\n"
-             "2. **Editar**: Click en '🔓 Editar Parámetros' → modifica → '✅ Confirmar y Recalcular'.\n"
-             "3. **Restaurar**: '↩ Restaurar Base' devuelve valores oficiales y recalcula.\n"
-             "3. **Importar**: '📂 Cargar CSV/Excel' carga escenarios guardados.\n"
-             "4. **Ejecutar': Click en '▶ Ejecutar Optimización Matemática' → ver progreso animado.\n"
-             "5. **Exportar': En 'Matriz de Rutas' → 'Exportar a Excel' (multi-hoja) o CSV.\n"
-             "6. **Asistente IA**: abre 🤖 Asistente IA (Gemini); la consulta requiere internet y una API Key.\n"
-             "7. **Navegación**: Sidebar izquierdo cambia entre Dashboard, Matriz, Manual, Asistente IA y Licencia."),
+
+        ctk.CTkLabel(
+            scroll,
+            text="Manual interactivo",
+            font=self.fonts["title"],
+            text_color=COLORS["TEXT_PRIMARY"]
+        ).pack(anchor="w", padx=4, pady=(0, 6))
+        ctk.CTkLabel(
+            scroll,
+            text="Sigue los cuatro pasos para configurar, resolver y analizar un escenario.",
+            font=self.fonts["body"],
+            text_color=COLORS["TEXT_SECONDARY"]
+        ).pack(anchor="w", padx=4, pady=(0, 16))
+
+        manual_steps = [
+            (
+                "1. Configurar Red",
+                "Define la red que deseas evaluar.",
+                "En Dashboard y Simulación, revisa costos fijos de L1–L4, capacidades, "
+                "demanda de Z1–Z6, máximo de centros y costo baseline. Pulsa Editar "
+                "Parámetros, actualiza los campos y elige Guardar Cambios para validar "
+                "y conservarlos en memoria. Si prefieres descartar, elige Cancelar Edición. "
+                "Las tarifas de envío de la matriz oficial no se editan desde esta versión.",
+                "Los datos oficiales suman 22,000 unidades al mes; los valores del estudio "
+                "abren L2 y L3 con costo de USD 182,500."
+            ),
+            (
+                "2. Ejecutar Branch-and-Bound",
+                "Resuelve el modelo MIP con los parámetros guardados.",
+                "Pulsa Ejecutar Optimización Matemática. El objetivo suma costos fijos de "
+                "apertura y costos variables de transporte. La demanda de cada zona debe "
+                "cubrirse exactamente; el flujo de cada centro no puede superar su capacidad "
+                "y la cantidad de centros abiertos respeta el máximo configurado. PuLP formula "
+                "el modelo y CBC busca la solución entera óptima con Branch-and-Bound.",
+                "El cálculo se ejecuta en segundo plano para mantener la interfaz receptiva."
+            ),
+            (
+                "3. Analizar Rutas",
+                "Comprueba costos, asignaciones y capacidad.",
+                "Revisa las tarjetas KPI y las gráficas de costos y utilización en Dashboard. "
+                "Abre Matriz de Rutas para ver cuánto envía cada centro a cada zona, el costo "
+                "unitario y el costo por ruta. Desde esa vista puedes exportar el reporte "
+                "ejecutivo a Excel o la matriz a CSV.",
+                "En el caso base, L2 atiende Z1–Z3 al 60% y L3 atiende Z4–Z6 al 83.3%."
+            ),
+            (
+                "4. Simular Escenarios",
+                "Evalúa cambios antes de ejecutar el modelo.",
+                "Edita costos fijos, capacidades, demandas, máximo de centros o baseline; "
+                "guarda los cambios y ejecuta la optimización para recalcular costos y "
+                "asignaciones. Compara el resultado con el último cálculo y restaura los "
+                "valores base cuando quieras volver al caso oficial. El asistente rápido "
+                "permite consultar el escenario visible sin salir de Dashboard, Matriz o Manual.",
+                "Un cambio en capacidad o costos puede alterar qué centros conviene abrir."
+            ),
         ]
-        
-        for title, content in manual_sections:
-            card = ctk.CTkFrame(scroll, fg_color=COLORS["BG_CARD"], corner_radius=12,
-                               border_width=2, border_color=COLORS["BORDER"])
-            card.pack(fill="x", pady=12, padx=4)
-            card.grid_columnconfigure(0, weight=1)
-            
-            ctk.CTkLabel(card, text=title, font=self.fonts["section"],
-                        text_color=COLORS["TEXT_PRIMARY"]).pack(anchor="w", padx=24, pady=(20, 8))
-            
-            ctk.CTkLabel(card, text=content, font=self.fonts["body"],
-                        text_color=COLORS["TEXT_SECONDARY"], justify="left",
-                        wraplength=1100).pack(anchor="w", padx=24, pady=(0, 20))
+        self.manual_tabs = ctk.CTkTabview(
+            scroll,
+            height=500,
+            fg_color=COLORS["BG_CARD"],
+            segmented_button_fg_color="#FFFFFF",
+            segmented_button_selected_color=COLORS["PRIMARY"],
+            segmented_button_selected_hover_color=COLORS["PRIMARY_HOVER"],
+            segmented_button_unselected_color="#F1F5F9",
+            segmented_button_unselected_hover_color="#E2E8F0",
+            text_color=COLORS["TEXT_PRIMARY"],
+            corner_radius=10
+        )
+        self.manual_tabs.pack(fill="x", padx=4, pady=(0, 20))
+
+        accents = (COLORS["PRIMARY"], COLORS["SUCCESS"], COLORS["WARNING"], "#7C3AED")
+        for index, (tab_name, title, content, tip) in enumerate(manual_steps):
+            tab = self.manual_tabs.add(tab_name)
+            tab.grid_columnconfigure(0, weight=1)
+            for heading, text, accent in (
+                (title, content, accents[index]),
+                ("Punto clave", tip, COLORS["SUCCESS"]),
+            ):
+                card = ctk.CTkFrame(
+                    tab,
+                    fg_color=COLORS["BG_CARD"],
+                    corner_radius=12,
+                    border_width=2,
+                    border_color=COLORS["BORDER"]
+                )
+                card.pack(fill="x", padx=10, pady=(12, 4))
+                ctk.CTkLabel(
+                    card,
+                    text=heading,
+                    font=self.fonts["section"],
+                    text_color=accent,
+                    anchor="w"
+                ).pack(anchor="w", padx=24, pady=(18, 8))
+                body = ctk.CTkLabel(
+                    card,
+                    text=text,
+                    font=self.fonts["body"],
+                    text_color=COLORS["TEXT_SECONDARY"],
+                    justify="left",
+                    anchor="w",
+                    wraplength=800
+                )
+                body.pack(anchor="w", padx=24, pady=(0, 18))
+                card.bind(
+                    "<Configure>",
+                    lambda event, label=body: label.configure(
+                        wraplength=max(180, event.width - 64)
+                    ),
+                    add=True
+                )
 
     # ========================================================
     # VISTA 4: ASISTENTE IA
@@ -1051,6 +1387,7 @@ class MIPRetailOptimizerApp:
         self.chat_history.grid_columnconfigure(0, weight=1)
 
         quick_frame = ctk.CTkFrame(card, fg_color="transparent")
+        self.quick_questions_frame = quick_frame
         quick_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 12))
         quick_questions = [
             "¿Por qué el modelo eligió L2 y L3?",
@@ -1090,6 +1427,7 @@ class MIPRetailOptimizerApp:
             command=self.enviar_mensaje_asistente
         )
         self.chat_send_button.grid(row=0, column=1)
+        self._register_chat_surface(self.chat_history, self.chat_send_button)
 
         self.chat_status.configure(
             text=(
@@ -1140,19 +1478,13 @@ class MIPRetailOptimizerApp:
 
     def configurar_api_key(self):
         if os.getenv("GEMINI_API_KEY", "").strip():
-            messagebox.showinfo(
-                "API Key configurada",
-                "Se está usando GEMINI_API_KEY del entorno o archivo .env. "
-                "Elimínala de allí si deseas configurar una clave local."
+            self.mostrar_toast(
+                "Gemini ya está configurado mediante GEMINI_API_KEY/.env.",
+                "info"
             )
             return
 
-        api_key = simpledialog.askstring(
-            "Configurar API Key de Gemini",
-            "Pega tu clave de Gemini. Se guardará en texto local junto a la aplicación.",
-            parent=self.root,
-            show="*"
-        )
+        api_key = self._solicitar_api_key()
         if api_key is None or not api_key.strip():
             return
 
@@ -1161,15 +1493,100 @@ class MIPRetailOptimizerApp:
             with open(config_path, "w", encoding="utf-8") as config_file:
                 json.dump({"GEMINI_API_KEY": api_key.strip()}, config_file, indent=2)
         except OSError as error:
-            messagebox.showerror("Error al guardar", f"No se pudo guardar la clave local:\n{error}")
+            self.mostrar_toast(f"No se pudo guardar la clave local: {error}", "error", duration=4500)
             return
 
         self.api_key = api_key.strip()
         self.api_key_source = "config_ia.json"
         self.chat_status.configure(text="Clave configurada y guardada localmente.")
         self._append_chat("Sistema: API Key guardada en config_ia.json (archivo local ignorado por Git).")
+        self.mostrar_toast("API Key configurada localmente.", "success")
 
-    def _append_chat(self, message):
+    def _solicitar_api_key(self):
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("Configurar API Key de Gemini")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.configure(fg_color=COLORS["BG_MAIN"])
+        width, height = 480, 230
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+        result: dict[str, str | None] = {"api_key": None}
+        card = ctk.CTkFrame(
+            dialog,
+            fg_color=COLORS["BG_CARD"],
+            corner_radius=14,
+            border_width=2,
+            border_color=COLORS["BORDER"]
+        )
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(
+            card,
+            text="Conecta tu asistente",
+            font=self.fonts["section"],
+            text_color=COLORS["TEXT_PRIMARY"]
+        ).pack(anchor="w", padx=20, pady=(18, 4))
+        ctk.CTkLabel(
+            card,
+            text="La clave se guarda localmente junto a la aplicación.",
+            font=self.fonts["body_small"],
+            text_color=COLORS["TEXT_SECONDARY"]
+        ).pack(anchor="w", padx=20, pady=(0, 10))
+        entry = ctk.CTkEntry(card, show="*", height=38, font=self.fonts["body"])
+        entry.pack(fill="x", padx=20, pady=(0, 12))
+
+        actions = ctk.CTkFrame(card, fg_color="transparent")
+        actions.pack(fill="x", padx=20, pady=(0, 12))
+        self._create_button(
+            actions,
+            text="Cancelar",
+            fg_color="#F1F5F9",
+            hover_color="#E2E8F0",
+            text_color=COLORS["TEXT_SECONDARY"],
+            command=dialog.destroy
+        ).pack(side="right", padx=(8, 0))
+
+        def save_key():
+            value = entry.get().strip()
+            if not value:
+                self.mostrar_toast("Pega una API Key válida para continuar.", "warning")
+                return
+            result["api_key"] = value
+            dialog.destroy()
+
+        self._create_button(
+            actions,
+            text="Guardar clave",
+            fg_color=COLORS["PRIMARY"],
+            hover_color=COLORS["PRIMARY_HOVER"],
+            command=save_key
+        ).pack(side="right")
+        dialog.bind("<Return>", lambda _event: save_key())
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        dialog.grab_set()
+        entry.focus_set()
+        self.root.wait_window(dialog)
+        return result["api_key"]
+
+    def _register_chat_surface(self, history, send_button):
+        surface = {
+            "history": history,
+            "body_labels": [],
+            "send_button": send_button,
+        }
+        history.bind(
+            "<Configure>",
+            lambda event, target=surface: self._update_chat_wrap(target, event),
+            add=True
+        )
+        self.chat_surfaces.append(surface)
+        for message in self.chat_messages:
+            self._render_chat_bubble(surface, message)
+        return surface
+
+    def _render_chat_bubble(self, surface, message):
         is_user = message.startswith("Tú:")
         is_assistant = message.startswith("Asistente:")
         if is_user:
@@ -1182,8 +1599,10 @@ class MIPRetailOptimizerApp:
             label, body = "Sistema", message.split(":", 1)[-1].strip()
             bubble_color, border_color, text_color = "#F1F5F9", COLORS["BORDER"], COLORS["TEXT_SECONDARY"]
 
-        row = ctk.CTkFrame(self.chat_history, fg_color="transparent")
+        history = surface["history"]
+        row = ctk.CTkFrame(history, fg_color="transparent")
         row.grid_columnconfigure(0, weight=1)
+        opposing_pad = max(32, min(88, int(max(history.winfo_width(), 380) * 0.16)))
         bubble = ctk.CTkFrame(
             row,
             fg_color=bubble_color,
@@ -1195,7 +1614,7 @@ class MIPRetailOptimizerApp:
             row=0,
             column=0,
             sticky="e" if is_user else "w",
-            padx=(100, 8) if is_user else (8, 100),
+            padx=(opposing_pad, 8) if is_user else (8, opposing_pad),
             pady=2
         )
         ctk.CTkLabel(
@@ -1205,17 +1624,90 @@ class MIPRetailOptimizerApp:
             text_color=COLORS["PRIMARY"] if is_user else COLORS["TEXT_SECONDARY"],
             anchor="w"
         ).pack(anchor="w", padx=12, pady=(8, 0))
-        ctk.CTkLabel(
+        body_label = ctk.CTkLabel(
             bubble,
             text=body,
             font=self.fonts["body"],
             text_color=text_color,
             justify="left",
             anchor="w",
-            wraplength=760
-        ).pack(anchor="w", padx=12, pady=(2, 8))
+            wraplength=max(180, history.winfo_width() - 150)
+        )
+        body_label.pack(anchor="w", padx=12, pady=(2, 8))
+        self.chat_label_histories[body_label] = history
+        surface["body_labels"].append(body_label)
         row.pack(fill="x", padx=8, pady=4)
-        self.chat_history._parent_canvas.yview_moveto(1.0)
+        self._scroll_chat_to_bottom(history)
+        return body_label
+
+    def _update_chat_wrap(self, surface, event):
+        wraplength = max(120, event.width - 144)
+        for label in surface["body_labels"]:
+            if label.winfo_exists():
+                label.configure(wraplength=wraplength)
+
+    def _scroll_chat_to_bottom(self, history):
+        if history.winfo_exists():
+            history._parent_canvas.yview_moveto(1.0)
+
+    def _append_chat(self, message):
+        self.chat_messages.append(message)
+        for surface in self.chat_surfaces:
+            self._render_chat_bubble(surface, message)
+
+    def _start_thinking_bubbles(self):
+        self._thinking_labels = [
+            self._render_chat_bubble(surface, "Asistente: ● ○ ○ Analizando escenario...")
+            for surface in self.chat_surfaces
+        ]
+        self._thinking_phase = 0
+        self._animate_thinking_bubbles()
+
+    def _animate_thinking_bubbles(self):
+        phases = (
+            "● ○ ○ Analizando escenario...",
+            "○ ● ○ Analizando escenario...",
+            "○ ○ ● Analizando escenario...",
+        )
+        text = phases[self._thinking_phase % len(phases)]
+        for label in getattr(self, "_thinking_labels", []):
+            if label.winfo_exists():
+                label.configure(text=text)
+        self._thinking_phase += 1
+        self.chat_thinking_job = self.root.after(280, self._animate_thinking_bubbles)
+
+    def _stop_thinking_animation(self):
+        if self.chat_thinking_job:
+            self.root.after_cancel(self.chat_thinking_job)
+            self.chat_thinking_job = None
+
+    def _begin_typewriter(self, answer):
+        self._stop_thinking_animation()
+        self._typing_labels = getattr(self, "_thinking_labels", [])
+        self._thinking_labels = []
+        for label in self._typing_labels:
+            if label.winfo_exists():
+                label.configure(text="")
+        self._typing_chunks = re.findall(r"\S+\s*", answer)
+        self._typing_index = 0
+        self._typewrite_next()
+
+    def _typewrite_next(self):
+        if self._typing_index >= len(self._typing_chunks):
+            self.chat_busy = False
+            self.chat_typing_job = None
+            for surface in self.chat_surfaces:
+                surface["send_button"].configure(state="normal", text="Enviar")
+            self._typing_labels = []
+            return
+
+        chunk = self._typing_chunks[self._typing_index]
+        self._typing_index += 1
+        for label in self._typing_labels:
+            if label.winfo_exists():
+                label.configure(text=label.cget("text") + chunk)
+                self._scroll_chat_to_bottom(self.chat_label_histories[label])
+        self.chat_typing_job = self.root.after(18, self._typewrite_next)
 
     def _assistant_context(self):
         try:
@@ -1263,28 +1755,37 @@ class MIPRetailOptimizerApp:
             "como si correspondiera a esos parámetros."
         )
 
-    def enviar_mensaje_asistente(self, prompt=None):
+    def enviar_mensaje_asistente(self, prompt=None, source="main"):
         if self.chat_busy:
             return
 
-        question = prompt or self.chat_input.get().strip()
+        input_widget = (
+            self.floating_chat_input if source == "floating" else self.chat_input
+        )
+        question = prompt if prompt is not None else input_widget.get().strip()
         if not question:
             return
+        if prompt is None:
+            input_widget.delete(0, "end")
+        if not self.quick_questions_hidden:
+            self.quick_questions_hidden = True
+            self.quick_questions_frame.grid_remove()
+        self._append_chat("Tú: " + question)
+
         if not self.api_key:
-            self._append_chat("Tú: " + question)
             self._append_chat(
                 "Asistente: Para usar Gemini, pulsa «Configurar API Key». "
                 "El modelo de optimización y las demás vistas funcionan sin conexión."
             )
+            self.mostrar_toast("Configura una API Key para consultar Gemini.", "info")
             return
 
-        if prompt is None:
-            self.chat_input.delete(0, "end")
-        self._append_chat("Tú: " + question)
         context = self._assistant_context()
         self.chat_busy = True
-        self.chat_send_button.configure(state="disabled", text="Consultando…")
+        for surface in self.chat_surfaces:
+            surface["send_button"].configure(state="disabled", text="Consultando…")
         self.chat_status.configure(text="Gemini está preparando una respuesta…")
+        self._start_thinking_bubbles()
         threading.Thread(
             target=self._request_gemini,
             args=(question, context, self.api_key, list(self.chat_conversation[-12:])),
@@ -1323,26 +1824,35 @@ class MIPRetailOptimizerApp:
             self.root.after(0, self._finish_gemini_request, answer, None, question)
         except Exception as error:
             message = str(error).replace(api_key, "[clave oculta]")
-            self.root.after(0, self._finish_gemini_request, None, message, question)
+            try:
+                self.root.after(0, self._finish_gemini_request, None, message, question)
+            except (RuntimeError, tk.TclError):
+                return
 
     def _finish_gemini_request(self, answer, error, question):
-        self.chat_busy = False
-        self.chat_send_button.configure(state="normal", text="Enviar")
         if error:
             self.chat_status.configure(text="No se pudo completar la consulta.")
-            self._append_chat(
-                "Asistente: No fue posible consultar Gemini. Comprueba la conexión "
-                f"y la API Key. Detalle: {error}"
-            )
-            return
+            answer = f"No fue posible consultar Gemini: {error}"
+            self.mostrar_toast("No se pudo completar la consulta a Gemini.", "error")
+        else:
+            answer = self._sanitize_assistant_response(answer)
+            self.chat_conversation.extend([
+                {"role": "user", "text": question},
+                {"role": "model", "text": answer},
+            ])
+            self.chat_conversation = self.chat_conversation[-12:]
+            self.chat_status.configure(text=f"Respuesta recibida de {GEMINI_MODEL}.")
 
-        self.chat_conversation.extend([
-            {"role": "user", "text": question},
-            {"role": "model", "text": answer},
-        ])
-        self.chat_conversation = self.chat_conversation[-12:]
-        self.chat_status.configure(text=f"Respuesta recibida de {GEMINI_MODEL}.")
-        self._append_chat("Asistente: " + answer)
+        answer = self._sanitize_assistant_response(answer)
+        assistant_message = "Asistente: " + answer
+        self.chat_messages.append(assistant_message)
+        self._begin_typewriter(answer)
+
+    @staticmethod
+    def _sanitize_assistant_response(answer):
+        answer = re.sub(r"\*{1,2}|#+", "", answer)
+        answer = answer.replace("```", "").replace("`", "")
+        return answer.strip()
         
     # ========================================================
     # VISTA 5: LICENCIA Y ROI COMERCIAL
@@ -1438,56 +1948,90 @@ class MIPRetailOptimizerApp:
     # LÓGICA DE NEGOCIO
     # ========================================================
     def cargar_valores_iniciales(self):
-        for i, costo in enumerate(COSTOS_FIJOS_DEFAULT):
-            self.entry_vars[f'costo_fijo_{i}'].delete(0, "end")
-            self.entry_vars[f'costo_fijo_{i}'].insert(0, f"{costo:,}")
-        
-        for i, cap in enumerate(CAPACIDADES_DEFAULT):
-            self.entry_vars[f'capacidad_{i}'].delete(0, "end")
-            self.entry_vars[f'capacidad_{i}'].insert(0, f"{cap:,}")
-        
-        for j, dem in enumerate(DEMANDA_DEFAULT):
-            self.entry_vars[f'demanda_{j}'].delete(0, "end")
-            self.entry_vars[f'demanda_{j}'].insert(0, f"{dem:,}")
-        
-        self.entry_vars['max_centros'].delete(0, "end")
-        self.entry_vars['max_centros'].insert(0, str(MAX_CENTROS_DEFAULT))
-        
-        self.entry_vars['baseline'].delete(0, "end")
-        self.entry_vars['baseline'].insert(0, f"{COSTO_BASELINE_DEFAULT:,}")
-    
+        self._set_parameter_fields((
+            COSTOS_FIJOS_DEFAULT,
+            CAPACIDADES_DEFAULT,
+            DEMANDA_DEFAULT,
+            MAX_CENTROS_DEFAULT,
+            COSTO_BASELINE_DEFAULT,
+        ))
+
+    def _set_parameter_fields(self, params):
+        costos_fijos, capacidades, demandas, max_centros, baseline = params
+        values = {
+            **{f"costo_fijo_{i}": value for i, value in enumerate(costos_fijos)},
+            **{f"capacidad_{i}": value for i, value in enumerate(capacidades)},
+            **{f"demanda_{i}": value for i, value in enumerate(demandas)},
+            "max_centros": max_centros,
+            "baseline": baseline,
+        }
+        for key, value in values.items():
+            entry = self.entry_vars[key]
+            entry.configure(state="normal")
+            entry.delete(0, "end")
+            entry.insert(0, f"{value:,}" if key != "max_centros" else str(value))
+
     def bloquear_campos(self):
         for entry in self.entry_vars.values():
             entry.configure(state="disabled")
         self.modo_edicion = False
         self.mode_indicator.configure(text="🔒  Modo Protegido", text_color="#DC2626")
-        self.btn_edit.pack(side="left", padx=4)
-        self.confirm_btn.pack_forget() if hasattr(self, 'confirm_btn') else None
-    
+        self.btn_save.pack_forget()
+        self.btn_cancel_edit.pack_forget()
+        if not self.btn_edit.winfo_manager():
+            self.btn_edit.pack(side="left", before=self.btn_restore, padx=4)
+
     def desbloquear_campos(self):
+        if self.optimization_busy:
+            self.mostrar_toast("Espera a que termine el cálculo para editar.", "warning")
+            return
         for entry in self.entry_vars.values():
             entry.configure(state="normal")
         self.modo_edicion = True
         self.mode_indicator.configure(text="✏️  Modo Edición Activo", text_color=COLORS["SUCCESS"])
         self.btn_edit.pack_forget()
-    
+        self.btn_save.pack(side="left", before=self.btn_restore, padx=4)
+        self.btn_cancel_edit.pack(side="left", before=self.btn_restore, padx=4)
+
     def habilitar_edicion(self):
-        if messagebox.askyesno("Confirmar Edición",
-            "¿Deseas desbloquear los parámetros para una simulación personalizada?",
-            icon="question"):
+        if self.confirmar_accion(
+            "Editar parámetros",
+            "Podrás modificar los valores del escenario. Guarda los cambios antes de ejecutar la optimización.",
+            confirm_text="Editar"
+        ):
             self.desbloquear_campos()
-    
+
+    def guardar_cambios(self):
+        try:
+            params = self.leer_parametros_ui()
+        except ValueError as error:
+            self.mostrar_toast(str(error), "error", duration=4000)
+            return
+
+        self.saved_parameters = params
+        self._set_parameter_fields(params)
+        self.bloquear_campos()
+        self.mostrar_toast("Parámetros guardados correctamente", "success")
+
+    def cancelar_edicion(self):
+        if self.saved_parameters is not None:
+            self._set_parameter_fields(self.saved_parameters)
+        self.bloquear_campos()
+        self.mostrar_toast("Edición cancelada.", "info")
+
     def restaurar_valores_base(self):
-        if messagebox.askyesno("Confirmar Restauración",
-            "¿Restaurar todos los parámetros a los valores oficiales del estudio?",
-            icon="question"):
-            self.cargar_valores_iniciales()
-            self.bloquear_campos()
-            self.run_optimization_silencioso()
-            messagebox.showinfo("Valores Restaurados",
-                "Parámetros restablecidos a valores oficiales.\n"
-                "Modelo recalculado: $182,500 USD / 24.90% ahorro.")
-    
+        if not self.confirmar_accion(
+            "Restaurar valores base",
+            "Se reemplazarán los parámetros guardados por los valores oficiales del estudio.",
+            confirm_text="Restaurar"
+        ):
+            return
+        self.cargar_valores_iniciales()
+        self.saved_parameters = self.leer_parametros_ui()
+        self.bloquear_campos()
+        self.mostrar_toast("Parámetros oficiales restaurados; recalculando el escenario.", "info")
+        self.run_optimization_silencioso()
+
     def importar_escenario(self):
         file_path = filedialog.askopenfilename(
             title="Importar Escenario",
@@ -1507,52 +2051,64 @@ class MIPRetailOptimizerApp:
                       **{f'demanda_{j}': f'demanda_{j}' for j in range(6)},
                       'max_centros': 'max_centros', 'baseline': 'baseline'}
             
+            self.desbloquear_campos()
+            imported = 0
             for pk, ek in mapping.items():
                 if pk in params and ek in self.entry_vars:
-                    self.entry_vars[ek].configure(state="normal")
                     self.entry_vars[ek].delete(0, "end")
                     self.entry_vars[ek].insert(0, str(params[pk]))
-                    self.entry_vars[ek].configure(state="disabled" if not self.modo_edicion else "normal")
-            
-            messagebox.showinfo("Importación Exitosa", f"{len(params)} parámetros importados.")
-        except Exception as e:
-            messagebox.showerror("Error", f"No se pudo importar:\n{e}")
-    
+                    imported += 1
+            self.leer_parametros_ui()
+            self.mostrar_toast(
+                f"{imported} parámetros importados. Revisa y guarda los cambios.",
+                "success"
+            )
+        except Exception as error:
+            self.mostrar_toast(f"No se pudo importar el escenario: {error}", "error", duration=4500)
+
     def leer_parametros_ui(self):
         try:
-            costos_fijos = [int(self.entry_vars[f'costo_fijo_{i}'].get().replace(',','')) for i in range(4)]
-            capacidades = [int(self.entry_vars[f'capacidad_{i}'].get().replace(',','')) for i in range(4)]
-            demandas = [int(self.entry_vars[f'demanda_{j}'].get().replace(',','')) for j in range(6)]
-            max_centros = int(self.entry_vars['max_centros'].get())
-            baseline = int(self.entry_vars['baseline'].get().replace(',',''))
-            
-            if max_centros < 1 or max_centros > 4:
-                raise ValueError("Máx. CDs debe ser 1-4")
-            if any(c < 0 for c in costos_fijos): raise ValueError("Costos fijos no negativos")
-            if any(c <= 0 for c in capacidades): raise ValueError("Capacidades positivas")
-            if any(d < 0 for d in demandas): raise ValueError("Demandas no negativas")
-            if baseline <= 0: raise ValueError("Baseline positivo")
-            
-            return costos_fijos, capacidades, demandas, max_centros, baseline
-        except ValueError as e:
-            raise ValueError(f"Parámetro inválido: {e}")
-    
+            costos_fijos = [int(self.entry_vars[f"costo_fijo_{i}"].get().replace(",", "")) for i in range(4)]
+            capacidades = [int(self.entry_vars[f"capacidad_{i}"].get().replace(",", "")) for i in range(4)]
+            demandas = [int(self.entry_vars[f"demanda_{j}"].get().replace(",", "")) for j in range(6)]
+            max_centros = int(self.entry_vars["max_centros"].get())
+            baseline = int(self.entry_vars["baseline"].get().replace(",", ""))
+        except (ValueError, KeyError) as error:
+            raise ValueError(f"Parámetro inválido: {error}") from error
+
+        if max_centros < 1 or max_centros > len(UBICACIONES_DEFAULT):
+            raise ValueError("Máximo de centros: elige un valor entre 1 y 4.")
+        if any(costo < 0 for costo in costos_fijos):
+            raise ValueError("Los costos fijos no pueden ser negativos.")
+        if any(capacidad <= 0 for capacidad in capacidades):
+            raise ValueError("Las capacidades deben ser mayores que cero.")
+        if any(demanda < 0 for demanda in demandas):
+            raise ValueError("Las demandas no pueden ser negativas.")
+        if baseline <= 0:
+            raise ValueError("El costo baseline debe ser mayor que cero.")
+        return costos_fijos, capacidades, demandas, max_centros, baseline
+
     def iniciar_ejecucion_progresiva(self):
         """Inicia la animación paso a paso"""
-        if self.is_executing:
+        if self.is_executing or self.optimization_busy:
             return
-        
+        if self.modo_edicion:
+            self.mostrar_toast("Guarda o cancela la edición antes de ejecutar.", "warning")
+            return
+
         try:
             params = self.leer_parametros_ui()
-        except ValueError as e:
-            messagebox.showerror("Validación", str(e))
+        except ValueError as error:
+            self.mostrar_toast(str(error), "error", duration=4000)
             return
 
         if not self.execution_card.winfo_manager():
             self.execution_card.pack(fill="x", pady=(0, 16), before=self.kpi_card)
-        
+
         self.is_executing = True
         self.btn_execute.configure(state="disabled", text="⏳ Ejecutando...")
+        for button in (self.btn_edit, self.btn_restore, self.btn_import):
+            button.configure(state="disabled")
         self.execution_status.configure(text="● Iniciando...", text_color=COLORS["PRIMARY"])
         self.progress_bar.set(0)
         self.execution_log.configure(state="normal")
@@ -1563,23 +2119,26 @@ class MIPRetailOptimizerApp:
         
         self.execution_step = 0
         self.execution_params = params
-        self.execution_baseline = params[4]
+        _, capacidades, demandas, max_centros, _ = params
+        max_capacity = sum(sorted(capacidades, reverse=True)[:max_centros])
+        total_demand = sum(demandas)
+        self.execution_steps = [
+            f"[1/4] Validando capacidad máxima disponible ({max_capacity:,} u) "
+            f"frente a demanda ({total_demand:,} u)...",
+            "[2/4] Construyendo el modelo MIP con los parámetros guardados...",
+            "[3/4] Resolviendo el modelo con CBC (Branch-and-Bound)...",
+            "[4/4] Finalizando la solución óptima del escenario...",
+        ]
         self._run_execution_step(0)
-    
+
     def _run_execution_step(self, step):
         """Ejecuta animación paso a paso usando after()"""
-        steps = [
-            (0.15, "[1/4] Validando restricciones de capacidad (63,000 u) vs. demanda total (22,000 u)..."),
-            (0.40, "[2/4] Construyendo matriz de costos fijos y variables en PuLP..."),
-            (0.70, "[3/4] Ejecutando solver CBC (Branch-and-Bound Entero Mixto)..."),
-            (1.0, "[4/4] Solución óptima global encontrada: $182,500 USD (Ahorro: 24.90%)."),
-        ]
-        
-        if step >= len(steps):
+        if step >= len(self.execution_steps):
             self._finalize_execution()
             return
-        
-        progress, msg = steps[step]
+
+        progress = (step + 1) / (len(self.execution_steps) + 1)
+        msg = self.execution_steps[step]
         self.progress_bar.set(progress)
         self.execution_status.configure(text=f"● Paso {step+1}/4", text_color=COLORS["PRIMARY"])
         
@@ -1588,69 +2147,110 @@ class MIPRetailOptimizerApp:
         self.execution_log.see("end")
         self.execution_log.configure(state="disabled")
         
-        # Delay variable por paso
         delays = [400, 500, 600, 300]
         self.root.after(delays[step], lambda: self._run_execution_step(step + 1))
-    
+
     def _finalize_execution(self):
-        """Ejecuta el modelo real y muestra resultados"""
-        costos_fijos, capacidades, demandas, max_centros, baseline = self.execution_params
-        
+        """Resuelve el modelo fuera del hilo de interfaz."""
         self.execution_log.configure(state="normal")
-        self.execution_log.insert("end", "\n✓ Ejecutando solver CBC...\n")
+        self.execution_log.insert("end", "\n✓ Ejecutando CBC en segundo plano...\n")
         self.execution_log.see("end")
         self.execution_log.configure(state="disabled")
-        self.progress_bar.set(1.0)
-        
-        try:
-            resultado = resolver_modelo(
-                costos_fijos=costos_fijos,
-                capacidades=capacidades,
-                demandas=demandas,
-                costos_envio=COSTOS_ENVIO_DEFAULT,
-                max_centros=max_centros,
-                zonas=ZONAS_DEFAULT,
-                ubicaciones=UBICACIONES_DEFAULT,
-                costo_baseline=baseline
+        if not self._solve_model_async(self.execution_params, self._finish_execution):
+            self._finish_execution(None, RuntimeError("Ya hay un cálculo en curso."), self.execution_params)
+
+    def _solve_model_async(self, params, callback):
+        if self.optimization_busy:
+            return False
+
+        self.optimization_busy = True
+        for button in (self.btn_edit, self.btn_restore, self.btn_import):
+            button.configure(state="disabled")
+        self.optimization_request_id += 1
+        request_id = self.optimization_request_id
+        costos_fijos, capacidades, demandas, max_centros, baseline = params
+
+        def solve():
+            try:
+                result = resolver_modelo(
+                    costos_fijos=costos_fijos,
+                    capacidades=capacidades,
+                    demandas=demandas,
+                    costos_envio=COSTOS_ENVIO_DEFAULT,
+                    max_centros=max_centros,
+                    zonas=ZONAS_DEFAULT,
+                    ubicaciones=UBICACIONES_DEFAULT,
+                    costo_baseline=baseline
+                )
+                error = None
+            except Exception as solver_error:
+                result = None
+                error = solver_error
+            try:
+                self.root.after(
+                    0, self._deliver_model_result, request_id, callback,
+                    result, error, params
+                )
+            except (RuntimeError, tk.TclError):
+                return
+
+        self.solver_thread = threading.Thread(target=solve, name="mip-solver", daemon=True)
+        self.solver_thread.start()
+        return True
+
+    def _deliver_model_result(self, request_id, callback, result, error, params):
+        if request_id != self.optimization_request_id:
+            return
+        self.optimization_busy = False
+        for button in (self.btn_edit, self.btn_restore, self.btn_import):
+            button.configure(state="normal")
+        callback(result, error, params)
+
+    def _finish_execution(self, resultado, error, params):
+        self.is_executing = False
+        self.btn_execute.configure(state="normal", text="▶  Ejecutar Optimización Matemática")
+        for button in (self.btn_edit, self.btn_restore, self.btn_import):
+            button.configure(state="normal")
+
+        if error or not resultado or resultado.get("estado") != "Optimal":
+            detail = str(error) if error else (
+                f"{resultado.get('estado')}: {resultado.get('mensaje', 'No se encontró solución óptima.')}"
             )
-            
-            if resultado['estado'] == 'Optimal':
-                self.ultimo_resultado = resultado
-                self.costo_actual = baseline
-                self.costo_optimo = resultado['costo_total']
-                
-                self.execution_log.configure(state="normal")
-                self.execution_log.insert("end", f"\n✅ OPTIMAL: ${resultado['costo_total']:,.0f} | Ahorro: ${resultado['ahorro']:,.0f} ({resultado['porcentaje_ahorro']:.2f}%)\n")
-                self.execution_log.see("end")
-                self.execution_log.configure(state="disabled")
-                
-                self.execution_status.configure(text="● Completado ✓", text_color=COLORS["SUCCESS"])
-                self.btn_execute.configure(state="normal", text="▶  Ejecutar Optimización Matemática")
-                self.is_executing = False
-                
-                self.actualizar_kpis_y_resultados(resultado)
-                
-                messagebox.showinfo("Optimización Completada",
-                    f"✅ Solución óptima global encontrada\n\n"
-                    f"Costo Total Óptimo: ${resultado['costo_total']:,.0f} USD\n"
-                    f"Ahorro: ${resultado['ahorro']:,.0f} ({resultado['porcentaje_ahorro']:.2f}%)\n"
-                    f"Centros: {', '.join(resultado['centros_abiertos'])}")
-            else:
-                raise Exception(f"Estado: {resultado['estado']} - {resultado['mensaje']}")
-                
-        except Exception as e:
-            self.execution_log.configure(state="normal")
-            self.execution_log.insert("end", f"\n❌ Error: {e}\n")
-            self.execution_log.see("end")
-            self.execution_log.configure(state="disabled")
+            self._append_execution_log(f"\nError de optimización: {detail}")
             self.execution_status.configure(text="● Error", text_color=COLORS["DANGER"])
-            self.btn_execute.configure(state="normal", text="▶  Ejecutar Optimización Matemática")
-            self.is_executing = False
-            messagebox.showerror("Error", str(e))
-    
-    def actualizar_kpis_y_resultados(self, resultado):
+            self.mostrar_toast(f"No se pudo resolver el escenario: {detail}", "error", duration=5000)
+            return
+
+        try:
+            self.ultimo_resultado = resultado
+            self.actualizar_kpis_y_resultados(resultado, params)
+        except Exception as ui_error:
+            self.execution_status.configure(text="● Error al actualizar", text_color=COLORS["DANGER"])
+            self.mostrar_toast(f"El cálculo terminó, pero no se pudo actualizar la vista: {ui_error}", "error")
+            return
+
+        self.progress_bar.set(1.0)
+        self.execution_status.configure(text="● Completado ✓", text_color=COLORS["SUCCESS"])
+        self._append_execution_log(
+            f"\nOPTIMAL: ${resultado['costo_total']:,.0f} | "
+            f"Ahorro: ${resultado['ahorro']:,.0f} ({resultado['porcentaje_ahorro']:.2f}%)"
+        )
+        self.mostrar_toast(
+            f"Optimización lista: {', '.join(resultado['centros_abiertos'])}, "
+            f"${resultado['costo_total']:,.0f}/mes.",
+            "success"
+        )
+
+    def _append_execution_log(self, message):
+        self.execution_log.configure(state="normal")
+        self.execution_log.insert("end", message + "\n")
+        self.execution_log.see("end")
+        self.execution_log.configure(state="disabled")
+
+    def actualizar_kpis_y_resultados(self, resultado, params=None):
         """Actualiza KPIs, gráficos y tabla"""
-        costos_fijos, capacidades, demandas, max_centros, baseline = self.leer_parametros_ui()
+        params = params or self.leer_parametros_ui()
+        costos_fijos, capacidades, demandas, max_centros, baseline = params
         self.ultimo_parametros = {
             "costos_fijos": costos_fijos,
             "capacidades": capacidades,
@@ -1678,38 +2278,38 @@ class MIPRetailOptimizerApp:
         self.crear_graficos()
         self.load_csv_data_from_result(resultado['asignaciones'])
         self.load_matrix_table(resultado['asignaciones'])
-        
-        # Guardar CSV
-        df = pd.DataFrame(resultado['asignaciones'])
-        df.to_csv('asignacion_logistica.csv', index=False)
-    
+
     def load_csv_data(self):
         self.run_optimization_silencioso()
-    
+
     def run_optimization_silencioso(self):
+        if self.optimization_busy:
+            self.mostrar_toast("Ya hay un cálculo en curso.", "warning")
+            return
         try:
-            costos_fijos, capacidades, demandas, max_centros, baseline = self.leer_parametros_ui()
-            resultado = resolver_modelo(
-                costos_fijos=costos_fijos,
-                capacidades=capacidades,
-                demandas=demandas,
-                costos_envio=COSTOS_ENVIO_DEFAULT,
-                max_centros=max_centros,
-                zonas=ZONAS_DEFAULT,
-                ubicaciones=UBICACIONES_DEFAULT,
-                costo_baseline=baseline
+            params = self.leer_parametros_ui()
+        except ValueError as error:
+            self.mostrar_toast(str(error), "error", duration=4000)
+            return
+
+        self.btn_execute.configure(state="disabled", text="Calculando escenario...")
+        if not self._solve_model_async(params, self._finish_silent_optimization):
+            self.btn_execute.configure(state="normal", text="▶  Ejecutar Optimización Matemática")
+
+    def _finish_silent_optimization(self, resultado, error, params):
+        self.btn_execute.configure(state="normal", text="▶  Ejecutar Optimización Matemática")
+        if error or not resultado or resultado.get("estado") != "Optimal":
+            detail = str(error) if error else (
+                f"{resultado.get('estado')}: {resultado.get('mensaje', 'No se encontró solución óptima.')}"
             )
-            if resultado["estado"] != "Optimal":
-                raise ValueError(
-                    f"{resultado['estado']}: {resultado.get('mensaje', 'No se encontró solución óptima.')}"
-                )
+            self.mostrar_toast(f"No se pudo calcular el escenario: {detail}", "error", duration=5000)
+            return
+        try:
             self.ultimo_resultado = resultado
-            self.actualizar_kpis_y_resultados(resultado)
-        except (ValueError, KeyError) as error:
-            messagebox.showerror("No se pudo calcular el escenario", str(error))
-        except Exception as error:
-            messagebox.showerror("Error del optimizador", str(error))
-    
+            self.actualizar_kpis_y_resultados(resultado, params)
+        except Exception as ui_error:
+            self.mostrar_toast(f"No se pudo actualizar el escenario: {ui_error}", "error", duration=5000)
+
     def load_csv_data_from_result(self, asignaciones):
         for item in self.tree_matrix.get_children():
             self.tree_matrix.delete(item)
@@ -1722,6 +2322,8 @@ class MIPRetailOptimizerApp:
     
     def load_matrix_table(self, asignaciones):
         """Carga tabla completa con costos calculados"""
+        if self.ultimo_parametros is None:
+            return
         for item in self.tree_matrix.get_children():
             self.tree_matrix.delete(item)
         
@@ -1757,7 +2359,7 @@ class MIPRetailOptimizerApp:
         for widget in self.chart2_canvas_frame.winfo_children():
             widget.destroy()
         
-        if not self.ultimo_resultado:
+        if not self.ultimo_resultado or not self.ultimo_parametros:
             return
         
         TEXT = COLORS["CHART_TEXT"]
@@ -1875,8 +2477,8 @@ class MIPRetailOptimizerApp:
         self.chart_canvases.append(canvas2)
     
     def exportar_excel_matriz(self):
-        if not self.ultimo_resultado:
-            messagebox.showwarning("Sin datos", "Ejecute una optimización primero.")
+        if not self.ultimo_resultado or not self.ultimo_parametros:
+            self.mostrar_toast("Ejecuta una optimización antes de exportar.", "warning")
             return
         
         path = filedialog.asksaveasfilename(
@@ -1888,13 +2490,13 @@ class MIPRetailOptimizerApp:
         
         try:
             self.crear_excel_ejecutivo(path)
-            messagebox.showinfo("Éxito", f"Reporte exportado:\n{path}")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
+            self.mostrar_toast(f"Reporte exportado: {os.path.basename(path)}", "success")
+        except Exception as error:
+            self.mostrar_toast(f"No se pudo exportar el reporte: {error}", "error", duration=4500)
     
     def exportar_csv_matriz(self):
-        if not self.ultimo_resultado:
-            messagebox.showwarning("Sin datos", "Ejecute una optimización primero.")
+        if not self.ultimo_resultado or not self.ultimo_parametros:
+            self.mostrar_toast("Ejecuta una optimización antes de exportar.", "warning")
             return
         
         path = filedialog.asksaveasfilename(
@@ -1920,9 +2522,9 @@ class MIPRetailOptimizerApp:
             df = pd.DataFrame(rows, columns=['Centro', 'Zona', 'Unidades',
                                             'Costo_Unit', 'Costo_Ruta', 'Pct_Demanda'])
             df.to_csv(path, index=False)
-            messagebox.showinfo("Éxito", f"CSV exportado:\n{path}")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
+            self.mostrar_toast(f"CSV exportado: {os.path.basename(path)}", "success")
+        except Exception as error:
+            self.mostrar_toast(f"No se pudo exportar el CSV: {error}", "error", duration=4500)
     
     def crear_excel_ejecutivo(self, file_path):
         wb = openpyxl.Workbook()
@@ -1930,15 +2532,15 @@ class MIPRetailOptimizerApp:
         wb.save(file_path)
     
     def toggle_fullscreen(self, event=None):
-        try:
-            self.root.state('zoomed' if not self.root.attributes('-zoomed') else 'normal')
-        except:
-            self.root.attributes('-zoomed', not self.root.attributes('-zoomed'))
+        if sys.platform.startswith("win"):
+            self.root.state("normal" if self.root.state() == "zoomed" else "zoomed")
+            return
+        self.root.attributes("-zoomed", not self.root.attributes("-zoomed"))
     
     def end_fullscreen(self, event=None):
         try:
             self.root.state('normal')
-        except:
+        except tk.TclError:
             self.root.attributes('-zoomed', False)
 
 
