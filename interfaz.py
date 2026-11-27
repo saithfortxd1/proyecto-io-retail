@@ -32,7 +32,7 @@ APP_DIR = os.path.dirname(
 )
 load_dotenv(os.path.join(APP_DIR, ".env"))
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 AI_SYSTEM_INSTRUCTION = """
 Eres el asistente de MIP Retail Optimizer, una herramienta de apoyo a decisiones
 logísticas. Responde en español, con claridad y rigor; distingue los resultados
@@ -113,7 +113,7 @@ no impide usar el optimizador local si Gemini no está disponible.
 # ============================================================
 COLORS = {
     # Fondos
-    "BG_MAIN": "#F8FAFC",       # Gris hielo - fondo principal
+    "BG_MAIN": "#EEF2F6",       # Gris azulado para separar las tarjetas blancas
     "BG_CARD": "#FFFFFF",       # Blanco puro - tarjetas
     "BG_SIDEBAR": "#0F172A",    # Azul pizarra profundo - sidebar
     "BG_SIDEBAR_HOVER": "#1E293B",
@@ -135,7 +135,7 @@ COLORS = {
     "DANGER": "#DC2626",        # Rojo - peligro/borrar
     
     # Bordes y divisores
-    "BORDER": "#E2E8F0",        # Borde sutil
+    "BORDER": "#CBD5E1",        # Borde marcado para dar relieve a las tarjetas
     "BORDER_FOCUS": "#2563EB",
     
     # Gráficos
@@ -168,6 +168,7 @@ class MIPRetailOptimizerApp:
         
         self.root.bind('<F11>', self.toggle_fullscreen)
         self.root.bind('<Escape>', self.end_fullscreen)
+        self.root.bind_all("<MouseWheel>", self._scroll_active_view, add="+")
         
         # Estado
         self.current_view = "dashboard"
@@ -184,6 +185,7 @@ class MIPRetailOptimizerApp:
         self.chat_busy = False
         self.chat_conversation = []
         self.chart_canvases = []
+        self.scroll_frames = {}
         
         # Variables Entry
         self.setup_styles()
@@ -191,23 +193,45 @@ class MIPRetailOptimizerApp:
         self.cargar_valores_iniciales()
         self.bloquear_campos()
         self.load_csv_data()
+
+    def _create_button(self, master, **kwargs):
+        kwargs["height"] = max(38, kwargs.get("height", 38))
+        kwargs.setdefault("corner_radius", 10)
+        kwargs.setdefault("border_width", 1)
+        kwargs.setdefault("border_color", COLORS["BORDER"])
+        return ctk.CTkButton(master, **kwargs)
+
+    def _scroll_active_view(self, event):
+        scroll_frame = self.scroll_frames.get(self.current_view)
+        if scroll_frame is None or not scroll_frame.winfo_exists():
+            return
+
+        delta = event.delta
+        if not delta:
+            return
+
+        units = int(-delta / 6) if sys.platform.startswith("win") else int(-delta)
+        if units == 0:
+            units = -1 if delta > 0 else 1
+        scroll_frame._parent_canvas.yview_scroll(units, "units")
+        return "break"
         
     def setup_styles(self):
         """Configura estilos globales"""
         # Fuentes
         self.fonts = {
-            "logo": ("Segoe UI", 20, "bold"),
-            "title": ("Segoe UI", 22, "bold"),
-            "section": ("Segoe UI", 16, "bold"),
-            "subsection": ("Segoe UI", 13, "bold"),
+            "logo": ("Bahnschrift", 20, "bold"),
+            "title": ("Bahnschrift", 22, "bold"),
+            "section": ("Bahnschrift", 16, "bold"),
+            "subsection": ("Bahnschrift", 13, "bold"),
             "body": ("Segoe UI", 12),
             "body_small": ("Segoe UI", 11),
-            "kpi_label": ("Segoe UI", 12),
-            "kpi_value": ("Segoe UI", 20, "bold"),
+            "kpi_label": ("Bahnschrift", 12, "bold"),
+            "kpi_value": ("Bahnschrift", 20, "bold"),
             "button": ("Segoe UI", 12, "bold"),
             "button_small": ("Segoe UI", 11),
             "sidebar_nav": ("Segoe UI", 12),
-            "chart_title": ("Segoe UI", 13, "bold"),
+            "chart_title": ("Bahnschrift", 13, "bold"),
             "chart_subtitle": ("Segoe UI", 11),
             "code": ("Consolas", 10),
         }
@@ -292,18 +316,19 @@ class MIPRetailOptimizerApp:
         ]
         
         for view_id, label, tooltip in nav_items:
-            btn = ctk.CTkButton(
+            btn = self._create_button(
                 self.sidebar,
                 text=label,
                 font=self.fonts["sidebar_nav"],
                 height=44,
-                corner_radius=8,
+                corner_radius=10,
                 fg_color="transparent",
                 text_color=COLORS["TEXT_WHITE"],
                 hover_color=COLORS["BG_SIDEBAR_HOVER"],
                 anchor="w",
                 command=lambda v=view_id: self.switch_view(v)
             )
+            btn.configure(border_color=COLORS["BG_SIDEBAR"])
             btn.pack(fill="x", padx=12, pady=4)
             self.nav_buttons[view_id] = btn
         
@@ -347,6 +372,7 @@ class MIPRetailOptimizerApp:
     def switch_view(self, view_id):
         """Cambia la vista activa"""
         self.current_view = view_id
+        self.active_scroll_frame = self.scroll_frames.get(view_id)
         for vid, frame in self.views.items():
             if vid == view_id:
                 frame.tkraise()
@@ -365,7 +391,7 @@ class MIPRetailOptimizerApp:
     # ========================================================
     def build_dashboard_view(self):
         frame = self.views["dashboard"]
-        frame.grid_rowconfigure(1, weight=1)
+        frame.grid_rowconfigure(0, weight=1)
         frame.grid_columnconfigure(0, weight=1)
         
         # Scroll principal
@@ -374,7 +400,8 @@ class MIPRetailOptimizerApp:
             fg_color=COLORS["BG_MAIN"],
             corner_radius=0
         )
-        main_scroll.grid(row=0, column=0, sticky="nsew", padx=24, pady=24)
+        self.scroll_frames["dashboard"] = main_scroll
+        main_scroll.grid(row=0, column=0, sticky="nsew", padx=24, pady=12)
         main_scroll.grid_columnconfigure(0, weight=1)
         
         # ===== HEADER DE LA VISTA =====
@@ -395,7 +422,7 @@ class MIPRetailOptimizerApp:
             text_color=COLORS["TEXT_SECONDARY"]
         ).pack(anchor="w", pady=(4, 0))
 
-        ctk.CTkButton(
+        self._create_button(
             header,
             text="🤖 Consultar al Asistente IA",
             font=self.fonts["button"],
@@ -410,10 +437,10 @@ class MIPRetailOptimizerApp:
             main_scroll,
             fg_color=COLORS["BG_CARD"],
             corner_radius=12,
-            border_width=1,
+            border_width=2,
             border_color=COLORS["BORDER"]
         )
-        scenario_card.pack(fill="x", pady=(0, 16))
+        scenario_card.pack(fill="x", pady=(0, 12))
         scenario_card.grid_columnconfigure(1, weight=1)
         
         ctk.CTkLabel(
@@ -451,14 +478,14 @@ class MIPRetailOptimizerApp:
             main_scroll,
             fg_color=COLORS["BG_CARD"],
             corner_radius=12,
-            border_width=1,
+            border_width=2,
             border_color=COLORS["BORDER"]
         )
-        params_card.pack(fill="x", pady=(0, 16))
+        params_card.pack(fill="x", pady=(0, 12))
         
         # Header con título + barra de herramientas
         params_header = ctk.CTkFrame(params_card, fg_color="transparent")
-        params_header.pack(fill="x", padx=24, pady=(20, 12))
+        params_header.pack(fill="x", padx=24, pady=(8, 6))
         params_header.grid_columnconfigure(1, weight=1)
         
         ctk.CTkLabel(
@@ -472,7 +499,7 @@ class MIPRetailOptimizerApp:
         toolbar = ctk.CTkFrame(params_header, fg_color="transparent")
         toolbar.grid(row=0, column=1, sticky="e")
         
-        self.btn_edit = ctk.CTkButton(
+        self.btn_edit = self._create_button(
             toolbar,
             text="🔓  Editar Parámetros",
             font=self.fonts["button"],
@@ -484,7 +511,7 @@ class MIPRetailOptimizerApp:
         )
         self.btn_edit.pack(side="left", padx=4)
         
-        self.btn_restore = ctk.CTkButton(
+        self.btn_restore = self._create_button(
             toolbar,
             text="↩ Restaurar Base",
             font=self.fonts["button"],
@@ -497,7 +524,7 @@ class MIPRetailOptimizerApp:
         )
         self.btn_restore.pack(side="left", padx=4)
         
-        self.btn_import = ctk.CTkButton(
+        self.btn_import = self._create_button(
             toolbar,
             text="📂  Cargar CSV/Excel",
             font=self.fonts["button"],
@@ -531,7 +558,7 @@ class MIPRetailOptimizerApp:
             text_color=COLORS["TEXT_PRIMARY"],
             corner_radius=8
         )
-        self.params_notebook.pack(fill="x", padx=24, pady=(0, 20))
+        self.params_notebook.pack(fill="x", padx=24, pady=(0, 8))
         
         # ---- Pestaña: Centros de Distribución ----
         self.tab_cds = self.params_notebook.add("🏢 Centros de Distribución")
@@ -544,7 +571,7 @@ class MIPRetailOptimizerApp:
                 self.tab_cds, text=h,
                 font=("Segoe UI", 12, "bold"),
                 text_color=COLORS["TEXT_SECONDARY"]
-            ).grid(row=0, column=col, padx=20, pady=14, sticky="ew")
+            ).grid(row=0, column=col, padx=20, pady=6, sticky="ew")
         
         for i, ubicacion in enumerate(UBICACIONES_DEFAULT):
             row = i + 1
@@ -562,7 +589,7 @@ class MIPRetailOptimizerApp:
                 fg_color="#FFFFFF", border_color=COLORS["BORDER"],
                 text_color=COLORS["TEXT_PRIMARY"]
             )
-            entry_costo.grid(row=row, column=1, padx=20, pady=10, sticky="ew")
+            entry_costo.grid(row=row, column=1, padx=20, pady=2, sticky="ew")
             self.entry_vars[f'costo_fijo_{i}'] = entry_costo
             
             entry_cap = ctk.CTkEntry(
@@ -571,7 +598,7 @@ class MIPRetailOptimizerApp:
                 fg_color="#FFFFFF", border_color=COLORS["BORDER"],
                 text_color=COLORS["TEXT_PRIMARY"]
             )
-            entry_cap.grid(row=row, column=2, padx=20, pady=10, sticky="ew")
+            entry_cap.grid(row=row, column=2, padx=20, pady=2, sticky="ew")
             self.entry_vars[f'capacidad_{i}'] = entry_cap
         
         # ---- Pestaña: Demandas por Zona ----
@@ -581,18 +608,18 @@ class MIPRetailOptimizerApp:
         ctk.CTkLabel(
             self.tab_demandas, text="Zona",
             font=("Segoe UI", 12, "bold"), text_color=COLORS["TEXT_SECONDARY"]
-        ).grid(row=0, column=0, padx=20, pady=14, sticky="w")
+        ).grid(row=0, column=0, padx=20, pady=6, sticky="w")
         ctk.CTkLabel(
             self.tab_demandas, text="Demanda (u/mes)",
             font=("Segoe UI", 12, "bold"), text_color=COLORS["TEXT_SECONDARY"]
-        ).grid(row=0, column=1, padx=20, pady=14, sticky="ew")
+        ).grid(row=0, column=1, padx=20, pady=6, sticky="ew")
         
         for j, zona in enumerate(ZONAS_DEFAULT):
             row = j + 1
             ctk.CTkLabel(
                 self.tab_demandas, text=f"  {zona}",
                 font=("Segoe UI", 12), text_color=COLORS["TEXT_PRIMARY"], anchor="w"
-            ).grid(row=row, column=0, padx=20, pady=10, sticky="w")
+            ).grid(row=row, column=0, padx=20, pady=2, sticky="w")
             
             entry_dem = ctk.CTkEntry(
                 self.tab_demandas, width=250, height=38,
@@ -600,7 +627,7 @@ class MIPRetailOptimizerApp:
                 fg_color="#FFFFFF", border_color=COLORS["BORDER"],
                 text_color=COLORS["TEXT_PRIMARY"]
             )
-            entry_dem.grid(row=row, column=1, padx=20, pady=10, sticky="ew")
+            entry_dem.grid(row=row, column=1, padx=20, pady=2, sticky="ew")
             self.entry_vars[f'demanda_{j}'] = entry_dem
         
         # ---- Pestaña: Reglas y Baseline ----
@@ -616,7 +643,7 @@ class MIPRetailOptimizerApp:
             ctk.CTkLabel(
                 self.tab_config, text=label,
                 font=("Segoe UI", 12), text_color=COLORS["TEXT_PRIMARY"]
-            ).grid(row=idx, column=0, padx=24, pady=18, sticky="w")
+            ).grid(row=idx, column=0, padx=24, pady=8, sticky="w")
             
             entry = ctk.CTkEntry(
                 self.tab_config, width=250, height=40,
@@ -624,7 +651,7 @@ class MIPRetailOptimizerApp:
                 fg_color="#FFFFFF", border_color=COLORS["BORDER"],
                 text_color=COLORS["TEXT_PRIMARY"]
             )
-            entry.grid(row=idx, column=1, padx=24, pady=18, sticky="ew")
+            entry.grid(row=idx, column=1, padx=24, pady=8, sticky="ew")
             entry.insert(0, default)
             self.entry_vars[key] = entry
             
@@ -639,11 +666,11 @@ class MIPRetailOptimizerApp:
         exec_card.pack(fill="x", pady=(0, 16))
         exec_card.grid_columnconfigure(0, weight=1)
         
-        self.btn_execute = ctk.CTkButton(
+        self.btn_execute = self._create_button(
             exec_card,
             text="▶  Ejecutar Optimización Matemática",
-            font=("Segoe UI", 15, "bold"),
-            height=56,
+            font=("Bahnschrift", 15, "bold"),
+            height=48,
             fg_color=COLORS["PRIMARY"],
             hover_color=COLORS["PRIMARY_HOVER"],
             command=self.iniciar_ejecucion_progresiva
@@ -655,7 +682,7 @@ class MIPRetailOptimizerApp:
             main_scroll,
             fg_color=COLORS["BG_CARD"],
             corner_radius=12,
-            border_width=1,
+            border_width=2,
             border_color=COLORS["BORDER"]
         )
         self.execution_card.pack(fill="x", pady=(0, 16))
@@ -689,7 +716,7 @@ class MIPRetailOptimizerApp:
         # Log de ejecución
         self.execution_log = ctk.CTkTextbox(
             self.execution_card,
-            height=140,
+            height=85,
             font=("Consolas", 10),
             fg_color="#0F172A",
             text_color="#E2E8F0",
@@ -700,6 +727,7 @@ class MIPRetailOptimizerApp:
         self.execution_log.pack(fill="x", padx=24, pady=(0, 20))
         self.execution_log.insert("0.0", "Configura o verifica los parámetros y presiona 'Ejecutar Optimización Matemática' para calcular la red óptima.")
         self.execution_log.configure(state="disabled")
+        self.execution_card.pack_forget()
         
         # ===== KPIs EJECUTIVOS (inicialmente ocultos) =====
         self.kpi_card = ctk.CTkFrame(main_scroll, fg_color="transparent")
@@ -719,7 +747,7 @@ class MIPRetailOptimizerApp:
                 self.kpi_card,
                 fg_color=COLORS["BG_CARD"],
                 corner_radius=12,
-                border_width=1,
+                border_width=2,
                 border_color=COLORS["BORDER"]
             )
             card.grid(row=0, column=i, sticky="ew", padx=4)
@@ -747,20 +775,18 @@ class MIPRetailOptimizerApp:
         self.charts_card.pack(fill="x", pady=(0, 0))
         self.charts_card.grid_columnconfigure(0, weight=1)
         self.charts_card.grid_columnconfigure(1, weight=1)
-        self.charts_card.grid_rowconfigure(0, weight=1, minsize=360)
+        self.charts_card.grid_rowconfigure(0, weight=1, minsize=280)
         
         # Gráfico 1
         self.chart1_frame = ctk.CTkFrame(
             self.charts_card,
             fg_color=COLORS["BG_CARD"],
             corner_radius=12,
-            border_width=1,
+            border_width=2,
             border_color=COLORS["BORDER"]
         )
         self.chart1_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        self.chart1_frame.configure(height=360)
-        self.chart1_frame.grid_propagate(False)
-        self.chart1_frame.grid_rowconfigure(1, weight=1, minsize=300)
+        self.chart1_frame.grid_rowconfigure(1, weight=1, minsize=240)
         self.chart1_frame.grid_columnconfigure(0, weight=1)
         
         ctk.CTkLabel(
@@ -772,7 +798,7 @@ class MIPRetailOptimizerApp:
         
         self.chart1_canvas_frame = ctk.CTkFrame(self.chart1_frame, fg_color="transparent")
         self.chart1_canvas_frame.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
-        self.chart1_canvas_frame.grid_rowconfigure(0, weight=1, minsize=280)
+        self.chart1_canvas_frame.grid_rowconfigure(0, weight=1, minsize=220)
         self.chart1_canvas_frame.grid_columnconfigure(0, weight=1)
         
         # Gráfico 2
@@ -780,13 +806,11 @@ class MIPRetailOptimizerApp:
             self.charts_card,
             fg_color=COLORS["BG_CARD"],
             corner_radius=12,
-            border_width=1,
+            border_width=2,
             border_color=COLORS["BORDER"]
         )
         self.chart2_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        self.chart2_frame.configure(height=360)
-        self.chart2_frame.grid_propagate(False)
-        self.chart2_frame.grid_rowconfigure(1, weight=1, minsize=300)
+        self.chart2_frame.grid_rowconfigure(1, weight=1, minsize=240)
         self.chart2_frame.grid_columnconfigure(0, weight=1)
         
         ctk.CTkLabel(
@@ -798,7 +822,7 @@ class MIPRetailOptimizerApp:
         
         self.chart2_canvas_frame = ctk.CTkFrame(self.chart2_frame, fg_color="transparent")
         self.chart2_canvas_frame.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
-        self.chart2_canvas_frame.grid_rowconfigure(0, weight=1, minsize=280)
+        self.chart2_canvas_frame.grid_rowconfigure(0, weight=1, minsize=220)
         self.chart2_canvas_frame.grid_columnconfigure(0, weight=1)
         
     # ========================================================
@@ -823,18 +847,18 @@ class MIPRetailOptimizerApp:
         toolbar = ctk.CTkFrame(header, fg_color="transparent")
         toolbar.grid(row=0, column=1, rowspan=2, sticky="e")
         
-        ctk.CTkButton(toolbar, text="📊 Exportar a Excel",
+        self._create_button(toolbar, text="📊 Exportar a Excel",
                      font=self.fonts["button"], height=40, width=160,
                      fg_color=COLORS["PRIMARY"], hover_color=COLORS["PRIMARY_HOVER"],
                      command=self.exportar_excel_matriz).pack(side="left", padx=4)
-        ctk.CTkButton(toolbar, text="📄 Exportar CSV",
+        self._create_button(toolbar, text="📄 Exportar CSV",
                      font=self.fonts["button"], height=40, width=130,
                      fg_color="#F1F5F9", hover_color="#E2E8F0", text_color=COLORS["TEXT_SECONDARY"],
                      command=self.exportar_csv_matriz).pack(side="left", padx=4)
         
         # Tabla principal
         table_card = ctk.CTkFrame(frame, fg_color=COLORS["BG_CARD"], corner_radius=12,
-                                  border_width=1, border_color=COLORS["BORDER"])
+                                  border_width=2, border_color=COLORS["BORDER"])
         table_card.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 24))
         table_card.grid_rowconfigure(0, weight=1)
         table_card.grid_columnconfigure(0, weight=1)
@@ -888,6 +912,7 @@ class MIPRetailOptimizerApp:
         frame.grid_columnconfigure(0, weight=1)
         
         scroll = ctk.CTkScrollableFrame(frame, fg_color=COLORS["BG_MAIN"], corner_radius=0)
+        self.scroll_frames["manual"] = scroll
         scroll.grid(row=0, column=0, sticky="nsew", padx=24, pady=24)
         scroll.grid_columnconfigure(0, weight=1)
         
@@ -949,7 +974,7 @@ class MIPRetailOptimizerApp:
         
         for title, content in manual_sections:
             card = ctk.CTkFrame(scroll, fg_color=COLORS["BG_CARD"], corner_radius=12,
-                               border_width=1, border_color=COLORS["BORDER"])
+                               border_width=2, border_color=COLORS["BORDER"])
             card.pack(fill="x", pady=12, padx=4)
             card.grid_columnconfigure(0, weight=1)
             
@@ -985,7 +1010,7 @@ class MIPRetailOptimizerApp:
             text_color=COLORS["TEXT_SECONDARY"]
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
-        ctk.CTkButton(
+        self._create_button(
             header,
             text="🔑 Configurar API Key",
             font=self.fonts["button_small"],
@@ -1000,7 +1025,7 @@ class MIPRetailOptimizerApp:
             frame,
             fg_color=COLORS["BG_CARD"],
             corner_radius=12,
-            border_width=1,
+            border_width=2,
             border_color=COLORS["BORDER"]
         )
         card.grid(row=1, column=0, sticky="nsew", padx=28, pady=(0, 28))
@@ -1016,16 +1041,14 @@ class MIPRetailOptimizerApp:
         )
         self.chat_status.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 8))
 
-        self.chat_history = ctk.CTkTextbox(
+        self.chat_history = ctk.CTkScrollableFrame(
             card,
-            font=self.fonts["body"],
             fg_color="#F8FAFC",
-            text_color=COLORS["TEXT_PRIMARY"],
-            wrap="word",
             corner_radius=8
         )
+        self.scroll_frames["assistant"] = self.chat_history
         self.chat_history.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 12))
-        self.chat_history.configure(state="disabled")
+        self.chat_history.grid_columnconfigure(0, weight=1)
 
         quick_frame = ctk.CTkFrame(card, fg_color="transparent")
         quick_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 12))
@@ -1036,11 +1059,10 @@ class MIPRetailOptimizerApp:
             "Resume el modelo matemático MIP",
         ]
         for index, question in enumerate(quick_questions):
-            ctk.CTkButton(
+            self._create_button(
                 quick_frame,
                 text=question,
                 font=self.fonts["button_small"],
-                height=36,
                 fg_color="#EFF6FF",
                 hover_color="#DBEAFE",
                 text_color=COLORS["PRIMARY"],
@@ -1059,7 +1081,7 @@ class MIPRetailOptimizerApp:
         )
         self.chat_input.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self.chat_input.bind("<Return>", lambda _event: self.enviar_mensaje_asistente())
-        self.chat_send_button = ctk.CTkButton(
+        self.chat_send_button = self._create_button(
             input_frame,
             text="Enviar",
             width=100,
@@ -1148,10 +1170,52 @@ class MIPRetailOptimizerApp:
         self._append_chat("Sistema: API Key guardada en config_ia.json (archivo local ignorado por Git).")
 
     def _append_chat(self, message):
-        self.chat_history.configure(state="normal")
-        self.chat_history.insert("end", f"{message}\n\n")
-        self.chat_history.see("end")
-        self.chat_history.configure(state="disabled")
+        is_user = message.startswith("Tú:")
+        is_assistant = message.startswith("Asistente:")
+        if is_user:
+            label, body = "Tú", message[len("Tú:"):].strip()
+            bubble_color, border_color, text_color = "#DBEAFE", "#93C5FD", COLORS["TEXT_PRIMARY"]
+        elif is_assistant:
+            label, body = "Gemini", message[len("Asistente:"):].strip()
+            bubble_color, border_color, text_color = "#FFFFFF", COLORS["BORDER"], COLORS["TEXT_PRIMARY"]
+        else:
+            label, body = "Sistema", message.split(":", 1)[-1].strip()
+            bubble_color, border_color, text_color = "#F1F5F9", COLORS["BORDER"], COLORS["TEXT_SECONDARY"]
+
+        row = ctk.CTkFrame(self.chat_history, fg_color="transparent")
+        row.grid_columnconfigure(0, weight=1)
+        bubble = ctk.CTkFrame(
+            row,
+            fg_color=bubble_color,
+            corner_radius=12,
+            border_width=2,
+            border_color=border_color
+        )
+        bubble.grid(
+            row=0,
+            column=0,
+            sticky="e" if is_user else "w",
+            padx=(100, 8) if is_user else (8, 100),
+            pady=2
+        )
+        ctk.CTkLabel(
+            bubble,
+            text=label,
+            font=("Bahnschrift", 11, "bold"),
+            text_color=COLORS["PRIMARY"] if is_user else COLORS["TEXT_SECONDARY"],
+            anchor="w"
+        ).pack(anchor="w", padx=12, pady=(8, 0))
+        ctk.CTkLabel(
+            bubble,
+            text=body,
+            font=self.fonts["body"],
+            text_color=text_color,
+            justify="left",
+            anchor="w",
+            wraplength=760
+        ).pack(anchor="w", padx=12, pady=(2, 8))
+        row.pack(fill="x", padx=8, pady=4)
+        self.chat_history._parent_canvas.yview_moveto(1.0)
 
     def _assistant_context(self):
         try:
@@ -1289,6 +1353,7 @@ class MIPRetailOptimizerApp:
         frame.grid_columnconfigure(0, weight=1)
         
         scroll = ctk.CTkScrollableFrame(frame, fg_color=COLORS["BG_MAIN"], corner_radius=0)
+        self.scroll_frames["license"] = scroll
         scroll.grid(row=0, column=0, sticky="nsew", padx=24, pady=24)
         scroll.grid_columnconfigure(0, weight=1)
         
@@ -1304,7 +1369,7 @@ class MIPRetailOptimizerApp:
         
         # ROI Box
         roi_card = ctk.CTkFrame(scroll, fg_color=COLORS["BG_CARD"], corner_radius=12,
-                               border_width=1, border_color=COLORS["BORDER"])
+                               border_width=2, border_color=COLORS["BORDER"])
         roi_card.pack(fill="x", pady=(0, 24))
         roi_card.grid_columnconfigure((0,1,2), weight=1)
         
@@ -1325,7 +1390,7 @@ class MIPRetailOptimizerApp:
             cell.grid_columnconfigure(0, weight=1)
             
             ctk.CTkLabel(cell, text=label, font=("Segoe UI", 11), text_color=COLORS["TEXT_SECONDARY"]).pack(pady=(12, 2))
-            ctk.CTkLabel(cell, text=value, font=("Segoe UI", 18, "bold"), text_color=COLORS["SUCCESS"]).pack(pady=(0, 12))
+            ctk.CTkLabel(cell, text=value,             font=("Bahnschrift", 18, "bold"), text_color=COLORS["SUCCESS"]).pack(pady=(0, 12))
         
         ctk.CTkLabel(roi_card, text="*Baseline $243,000/mes → Optimizado $182,500/mes (caso real)",
                     font=("Segoe UI", 10), text_color=COLORS["TEXT_MUTED"]).grid(row=2, column=0, columnspan=3, pady=(0, 20))
@@ -1482,6 +1547,9 @@ class MIPRetailOptimizerApp:
         except ValueError as e:
             messagebox.showerror("Validación", str(e))
             return
+
+        if not self.execution_card.winfo_manager():
+            self.execution_card.pack(fill="x", pady=(0, 16), before=self.kpi_card)
         
         self.is_executing = True
         self.btn_execute.configure(state="disabled", text="⏳ Ejecutando...")
@@ -1680,6 +1748,7 @@ class MIPRetailOptimizerApp:
         )
     
     def crear_graficos(self):
+        self.root.update_idletasks()
         for chart_canvas in self.chart_canvases:
             plt.close(chart_canvas.figure)
         self.chart_canvases.clear()
@@ -1695,7 +1764,8 @@ class MIPRetailOptimizerApp:
         plt.style.use('default')
         
         # ---- GRÁFICO 1: Comparativa Baseline vs Óptimo ----
-        fig1, ax1 = plt.subplots(figsize=(6.5, 4.2), dpi=100)
+        chart1_width = max(4.5, self.chart1_canvas_frame.winfo_width() / 100)
+        fig1, ax1 = plt.subplots(figsize=(chart1_width, 3.2), dpi=100)
         fig1.patch.set_facecolor(COLORS["CHART_BG"])
         ax1.set_facecolor(COLORS["CHART_BG"])
         
@@ -1710,28 +1780,21 @@ class MIPRetailOptimizerApp:
                        xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
                        xytext=(0, 10), textcoords="offset points",
                        ha='center', va='bottom',
-                       fontweight='bold', fontsize=13, color=COLORS["CHART_TEXT"])
+                       fontweight='bold', fontsize=10, color=COLORS["CHART_TEXT"])
         
-        ax1.set_ylabel('USD / mes', fontsize=12, fontweight='bold', color=TEXT)
-        ax1.set_title('Costo Logístico Mensual: Baseline vs. Optimizado',
-                     fontsize=14, fontweight='bold', pad=18, color=TEXT)
+        ax1.set_ylabel('USD / mes', fontsize=10, fontweight='bold', color=TEXT)
+        ax1.set_title('Costo mensual: baseline vs. óptimo',
+                     fontsize=12, fontweight='bold', pad=12, color=TEXT)
         ax1.spines['top'].set_visible(False)
         ax1.spines['right'].set_visible(False)
         ax1.spines['left'].set_color(COLORS["BORDER"])
         ax1.spines['bottom'].set_color(COLORS["BORDER"])
-        ax1.tick_params(axis='x', colors=TEXT, labelsize=11)
-        ax1.tick_params(axis='y', colors=TEXT, labelsize=10)
+        ax1.tick_params(axis='x', colors=TEXT, labelsize=9)
+        ax1.tick_params(axis='y', colors=TEXT, labelsize=8)
         ax1.grid(axis='y', alpha=0.2, color=COLORS["BORDER"])
         ax1.set_ylim(0, max(values) * 1.28)
         
-        ahorro = self.costo_actual - self.costo_optimo
-        pct = (ahorro / self.costo_actual) * 100
-        ax1.text(0.5, 0.95, f'Ahorro: ${ahorro:,.0f} ({pct:.2f}%)',
-               transform=ax1.transAxes, ha='center', va='top',
-               fontsize=12, fontweight='bold', color=COLORS["SUCCESS"],
-               bbox=dict(boxstyle='round,pad=0.6', facecolor='#ECFDF5', edgecolor=COLORS["SUCCESS"]))
-        
-        plt.tight_layout(pad=2.0)
+        plt.tight_layout(pad=1.2)
         
         canvas1 = FigureCanvasTkAgg(fig1, master=self.chart1_canvas_frame)
         canvas1.get_tk_widget().pack(fill="both", expand=True)
@@ -1740,11 +1803,11 @@ class MIPRetailOptimizerApp:
         self.chart_canvases.append(canvas1)
         
         # ---- GRÁFICO 2: Utilización de Capacidad ----
-        fig2, ax2 = plt.subplots(figsize=(6.5, 4.2), dpi=100)
+        chart2_width = max(4.5, self.chart2_canvas_frame.winfo_width() / 100)
+        fig2, ax2 = plt.subplots(figsize=(chart2_width, 3.2), dpi=100)
         fig2.patch.set_facecolor(COLORS["CHART_BG"])
         ax2.set_facecolor(COLORS["CHART_BG"])
 
-        centros_labels = []
         util_vals = []
         vol_vals = []
         capacidades = self.ultimo_parametros["capacidades"]
@@ -1757,12 +1820,10 @@ class MIPRetailOptimizerApp:
             )
             util = (vol / cap * 100) if cap > 0 else 0
             
-            centro_estado = "abierto" if c in self.ultimo_resultado['centros_abiertos'] else "cerrado"
-            centros_labels.append(f"{c} ({centro_estado})  {vol:,.0f}/{cap:,.0f} u")
             util_vals.append(util)
             vol_vals.append(vol)
 
-        y_pos = range(len(centros_labels))
+        y_pos = range(len(UBICACIONES_DEFAULT))
         colors_bar = []
         for u in util_vals:
             if u == 0:
@@ -1776,17 +1837,17 @@ class MIPRetailOptimizerApp:
         
         bars = ax2.barh(y_pos, util_vals, color=colors_bar, edgecolor='white', height=0.65)
         ax2.set_yticks(y_pos)
-        ax2.set_yticklabels(centros_labels, fontsize=10, color=COLORS["CHART_TEXT"])
+        ax2.set_yticklabels(UBICACIONES_DEFAULT, fontsize=9, color=COLORS["CHART_TEXT"])
         ax2.set_xlim(0, 118)
-        ax2.set_xlabel('Utilización de Capacidad (%)', fontsize=11, fontweight='bold', color=COLORS["CHART_TEXT"])
-        ax2.set_title('Utilización de Capacidad por Centro de Distribución',
-                     fontsize=14, fontweight='bold', pad=18, color=COLORS["CHART_TEXT"])
+        ax2.set_xlabel('Utilización de capacidad (%)', fontsize=9, fontweight='bold', color=COLORS["CHART_TEXT"])
+        ax2.set_title('Utilización por centro',
+                     fontsize=12, fontweight='bold', pad=12, color=COLORS["CHART_TEXT"])
         ax2.spines['top'].set_visible(False)
         ax2.spines['right'].set_visible(False)
         ax2.spines['left'].set_color(COLORS["BORDER"])
         ax2.spines['bottom'].set_color(COLORS["BORDER"])
-        ax2.tick_params(axis='x', colors=COLORS["CHART_TEXT"], labelsize=10)
-        ax2.tick_params(axis='y', colors=COLORS["CHART_TEXT"], labelsize=10)
+        ax2.tick_params(axis='x', colors=COLORS["CHART_TEXT"], labelsize=8)
+        ax2.tick_params(axis='y', colors=COLORS["CHART_TEXT"], labelsize=9)
         ax2.grid(axis='x', alpha=0.2, color=COLORS["BORDER"])
         
         for bar, val, centro in zip(bars, util_vals, UBICACIONES_DEFAULT):
@@ -1801,11 +1862,11 @@ class MIPRetailOptimizerApp:
                 ha='left',
                 va='center',
                 fontweight='bold',
-                fontsize=10,
+                fontsize=9,
                 color=COLORS["CHART_TEXT"]
             )
         
-        plt.tight_layout(pad=2.0)
+        plt.tight_layout(pad=1.2)
         
         canvas2 = FigureCanvasTkAgg(fig2, master=self.chart2_canvas_frame)
         canvas2.get_tk_widget().pack(fill="both", expand=True)
