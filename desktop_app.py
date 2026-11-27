@@ -24,10 +24,11 @@ def resource_path(*parts: str) -> Path:
 
 
 def _load_api_key() -> str | None:
-    candidates = [resource_path(".env"), Path(__file__).resolve().parent / ".env"]
-    for env_path in candidates:
-        if env_path.is_file():
-            load_dotenv(env_path, override=False)
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        load_dotenv(os.path.join(sys._MEIPASS, ".env"), override=False)
+    else:
+        local_env = os.path.join(Path(__file__).resolve().parent, ".env")
+        load_dotenv(local_env, override=False)
     return os.getenv("GEMINI_API_KEY") or None
 
 
