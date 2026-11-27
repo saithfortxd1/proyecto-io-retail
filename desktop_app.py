@@ -29,18 +29,58 @@ def resource_path(*parts: str) -> Path:
 def _load_api_key() -> str | None:
     env_paths: list[Path] = []
     meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        env_paths.append(Path(os.path.join(meipass, ".env")))
-
     if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).resolve().parent
-        env_paths.extend((exe_dir / ".env", exe_dir.parent / ".env"))
+        env_paths.extend((exe_dir.parent / ".env", exe_dir / ".env"))
     else:
         env_paths.append(Path(__file__).resolve().parent / ".env")
+    if meipass:
+        # The bundled copy has highest priority in a frozen onefile executable.
+        env_paths.append(Path(meipass) / ".env")
 
+    seen: set[Path] = set()
     for env_path in env_paths:
-        load_dotenv(os.fspath(env_path), override=False)
-    return os.getenv("GEMINI_API_KEY") or None
+        try:
+            normalized_path = env_path.resolve()
+            if normalized_path in seen:
+                continue
+            seen.add(normalized_path)
+            load_dotenv(os.fspath(normalized_path), override=True)
+        except (OSError, UnicodeError, ValueError):
+            # The packaged .env is parsed below as a BOM/encoding-safe fallback.
+            continue
+
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if len(api_key) <= 20 and meipass:
+        bundled_env = Path(meipass) / ".env"
+        try:
+            raw = bundled_env.read_bytes()
+            decoded = None
+            for encoding in ("utf-8-sig", "utf-8", "cp1252"):
+                try:
+                    decoded = raw.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            if decoded is not None:
+                for line in decoded.splitlines():
+                    line = line.lstrip("\ufeff").strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if line.startswith("export "):
+                        line = line[7:].lstrip()
+                    name, separator, value = line.partition("=")
+                    if separator and name.strip() == "GEMINI_API_KEY":
+                        value = value.strip()
+                        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '\"'}:
+                            value = value[1:-1]
+                        os.environ["GEMINI_API_KEY"] = value.strip()
+                        api_key = os.environ["GEMINI_API_KEY"].strip()
+                        break
+        except (OSError, UnicodeError):
+            pass
+
+    return api_key if len(api_key) > 20 else None
 
 
 class Api:
