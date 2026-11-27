@@ -9,6 +9,7 @@ import type {
 export interface AssistantStatusResult {
   configured: boolean;
   model: string;
+  source?: 'pywebview' | 'server';
 }
 
 export interface AssistantQueryResult {
@@ -20,12 +21,16 @@ function desktopApi() {
   return typeof window !== 'undefined' ? window.pywebview?.api : undefined;
 }
 
-async function desktopChatApiWhenReady() {
-  if (typeof window === 'undefined') return undefined;
+function isDesktopShell(): boolean {
+  return typeof window !== 'undefined' &&
+    (Boolean(window.pywebview) || window.location.protocol === 'file:');
+}
 
+async function desktopApiWhenReady() {
+  if (typeof window === 'undefined') return undefined;
   const initialApi = desktopApi();
-  if (typeof initialApi?.consultar_asistente === 'function') return initialApi;
-  if (!window.pywebview) return undefined;
+  if (initialApi) return initialApi;
+  if (!isDesktopShell()) return undefined;
 
   await new Promise<void>((resolve) => {
     let settled = false;
@@ -36,11 +41,14 @@ async function desktopChatApiWhenReady() {
       window.removeEventListener('pywebviewready', finish);
       resolve();
     };
-    const timeoutId = window.setTimeout(finish, 3000);
+    const timeoutId = window.setTimeout(finish, 5000);
     window.addEventListener('pywebviewready', finish, { once: true });
   });
+  return desktopApi();
+}
 
-  const readyApi = desktopApi();
+async function desktopChatApiWhenReady() {
+  const readyApi = await desktopApiWhenReady();
   return typeof readyApi?.consultar_asistente === 'function' ? readyApi : undefined;
 }
 
@@ -53,13 +61,16 @@ export function sanitizeAssistantResponse(answer: string): string {
 }
 
 export async function checkAssistantStatus(): Promise<AssistantStatusResult> {
-  const api = desktopApi();
+  const api = await desktopApiWhenReady();
   if (api?.estado_asistente) {
     try {
-      return await api.estado_asistente();
+      return { ...(await api.estado_asistente()), source: 'pywebview' };
     } catch {
-      // Fall back to the development server when running outside the desktop app.
+      if (isDesktopShell()) return { configured: false, model: 'gemini-2.5-flash', source: 'pywebview' };
     }
+  }
+  if (isDesktopShell()) {
+    return { configured: false, model: 'gemini-2.5-flash', source: 'pywebview' };
   }
   try {
     const res = await fetch('/api/assistant/status');
@@ -69,6 +80,7 @@ export async function checkAssistantStatus(): Promise<AssistantStatusResult> {
       return {
         configured: Boolean(data.configured),
         model: data.model ?? 'gemini-4-hydrogen',
+        source: 'server',
       };
     }
   } catch {
@@ -78,6 +90,7 @@ export async function checkAssistantStatus(): Promise<AssistantStatusResult> {
   return {
     configured: false,
     model: 'gemini-4-hydrogen',
+    source: 'server',
   };
 }
 
@@ -95,6 +108,10 @@ export async function sendAssistantQuestion(
     });
     if (!result?.answer) throw new Error('No se pudo completar la consulta.');
     return { answer: sanitizeAssistantResponse(result.answer), model: result.model };
+  }
+
+  if (isDesktopShell()) {
+    throw new Error('El puente nativo del asistente no está disponible. Reinicia la aplicación de escritorio.');
   }
 
   const res = await fetch('/api/assistant', {

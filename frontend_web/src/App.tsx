@@ -204,11 +204,13 @@ export default function App() {
       setAssistantConfigured(status.configured);
       if (status.configured) {
         setAssistantStatusText(
-          `Gemini está habilitado en el servidor (${status.model}).`
+          `Gemini está habilitado en ${status.source === 'pywebview' ? 'la aplicación de escritorio' : 'el servidor'} (${status.model}).`
         );
       } else {
         setAssistantStatusText(
-          'Gemini no está configurado en el servidor. Agrega GEMINI_API_KEY en Secretos / Variables de entorno (o en .env local); la optimización funciona sin conexión.'
+          status.source === 'pywebview'
+            ? 'Gemini no está configurado en el archivo .env de la aplicación. Define GEMINI_API_KEY; la optimización funciona sin conexión.'
+            : 'Gemini no está configurado en el servidor. Agrega GEMINI_API_KEY en Secretos / Variables de entorno (o en .env local); la optimización funciona sin conexión.'
         );
       }
     });
@@ -220,7 +222,7 @@ export default function App() {
   const loadGeminiTutorialIfNeeded = useCallback(async () => {
     if (tutorialEnhanced || tutorialLoading) return;
     if (assistantConfigured === false) {
-      setTutorialError('Gemini no está configurado en el servidor (GEMINI_API_KEY).');
+      setTutorialError('Gemini no está configurado (GEMINI_API_KEY).');
       return;
     }
     if (assistantConfigured !== true) return;
@@ -301,7 +303,7 @@ export default function App() {
         capacityImpactReport: '',
         loading: false,
         error:
-          'Gemini no está configurado en el servidor (GEMINI_API_KEY). Se muestra el resumen numérico local.',
+          'Gemini no está configurado (GEMINI_API_KEY). Se muestra el resumen numérico local.',
         source: 'none',
       });
       return;
@@ -468,7 +470,9 @@ export default function App() {
           id: `a-${Date.now()}`,
           role: 'assistant',
           text:
-            'Gemini no está configurado en el servidor. Agrega tu clave GEMINI_API_KEY en el panel de Secretos / Variables de entorno de AI Studio (o en un archivo .env si lo ejecutas en tu PC). La optimización matemática y las demás vistas siguen funcionando normalmente.',
+            assistantConfigured === false
+              ? 'Gemini no está configurado. Define GEMINI_API_KEY en el entorno disponible para esta aplicación. La optimización matemática y las demás vistas siguen funcionando normalmente.'
+              : 'Gemini no está disponible en este momento. La optimización matemática y las demás vistas siguen funcionando normalmente.',
         },
       ]);
       notify('Falta GEMINI_API_KEY en Secretos o .env.', 'info');

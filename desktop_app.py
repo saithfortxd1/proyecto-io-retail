@@ -7,18 +7,12 @@ import os
 import base64
 import ntpath
 import sys
-from html import escape
 from pathlib import Path
 from typing import Any
 
 import webview
 from dotenv import load_dotenv
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from fpdf import FPDF
 
 from optimizacion import resolver_modelo
 
@@ -33,11 +27,19 @@ def resource_path(*parts: str) -> Path:
 
 
 def _load_api_key() -> str | None:
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        load_dotenv(os.path.join(sys._MEIPASS, ".env"), override=False)
+    env_paths: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        env_paths.append(Path(os.path.join(meipass, ".env")))
+
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        env_paths.extend((exe_dir / ".env", exe_dir.parent / ".env"))
     else:
-        local_env = os.path.join(Path(__file__).resolve().parent, ".env")
-        load_dotenv(local_env, override=False)
+        env_paths.append(Path(__file__).resolve().parent / ".env")
+
+    for env_path in env_paths:
+        load_dotenv(os.fspath(env_path), override=False)
     return os.getenv("GEMINI_API_KEY") or None
 
 
@@ -97,7 +99,7 @@ class Api:
             return {"ok": False, "error": f"No se pudo guardar el archivo: {exc}"}
 
     def guardar_pdf_ejecutivo(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Genera el informe PDF en Python y lo guarda mediante el diálogo nativo."""
+        """Genera un PDF ejecutivo y lo guarda con el diálogo nativo."""
         try:
             path = self._save_dialog(
                 "Reporte_Ejecutivo_MIP.pdf", ("Documento PDF (*.pdf)",)
@@ -124,148 +126,124 @@ class Api:
                     served_units += quantity
 
             total_demand = sum(float(value or 0) for value in demands)
-            service_level = (served_units / total_demand * 100) if total_demand > 0 else 0.0
+            service_level = served_units / total_demand * 100 if total_demand else 0.0
             opened = result.get("centros_abiertos") or []
             baseline = float(params.get("costo_baseline", 0) or 0)
             total_cost = float(result.get("costo_total", 0) or 0)
             saving = float(result.get("ahorro", baseline - total_cost) or 0)
             saving_pct = float(result.get("porcentaje_ahorro", 0) or 0)
 
-            navy = colors.HexColor("#0F172A")
-            blue = colors.HexColor("#2563EB")
-            pale = colors.HexColor("#F1F5F9")
-            slate = colors.HexColor("#475569")
-            green = colors.HexColor("#059669")
-            styles = getSampleStyleSheet()
-            title_style = ParagraphStyle(
-                "ExecutiveTitle", parent=styles["Title"], fontName="Helvetica-Bold",
-                fontSize=20, leading=24, textColor=navy, spaceAfter=3 * mm,
-            )
-            subtitle_style = ParagraphStyle(
-                "ExecutiveSubtitle", parent=styles["Normal"], fontSize=9,
-                leading=13, textColor=slate, spaceAfter=5 * mm,
-            )
-            kpi_label = ParagraphStyle(
-                "KpiLabel", parent=styles["Normal"], fontSize=8,
-                leading=10, textColor=slate, alignment=TA_CENTER,
-            )
-            heading = ParagraphStyle(
-                "SectionHeading", parent=styles["Heading2"], fontName="Helvetica-Bold",
-                fontSize=12, leading=15, textColor=navy, spaceBefore=4 * mm,
-                spaceAfter=2 * mm,
-            )
+            class ExecutivePdf(FPDF):
+                def header(self):
+                    self.set_fill_color(15, 23, 42)
+                    self.rect(0, 0, self.w, 20, style="F")
+                    self.set_text_color(255, 255, 255)
+                    self.set_font("Helvetica", "B", 11)
+                    self.set_xy(15, 7)
+                    self.cell(0, 6, "MIP RETAIL OPTIMIZER  |  ENTERPRISE")
 
-            def draw_page(canvas, doc):
-                canvas.saveState()
-                width, height = landscape(A4)
-                canvas.setFillColor(navy)
-                canvas.rect(0, height - 20 * mm, width, 20 * mm, fill=1, stroke=0)
-                canvas.setFillColor(colors.white)
-                canvas.setFont("Helvetica-Bold", 11)
-                canvas.drawString(15 * mm, height - 12 * mm, "MIP RETAIL OPTIMIZER  |  ENTERPRISE")
-                canvas.setFillColor(slate)
-                canvas.setFont("Helvetica", 8)
-                canvas.drawString(15 * mm, 10 * mm, "Reporte ejecutivo de optimización logística")
-                canvas.drawRightString(width - 15 * mm, 10 * mm, f"Página {doc.page}")
-                canvas.restoreState()
+                def footer(self):
+                    self.set_y(-12)
+                    self.set_text_color(71, 85, 105)
+                    self.set_font("Helvetica", "", 8)
+                    self.cell(0, 5, f"Reporte ejecutivo de optimizacion logistica  |  Pagina {self.page_no()}", align="C")
 
-            doc = SimpleDocTemplate(
-                path, pagesize=landscape(A4), rightMargin=15 * mm,
-                leftMargin=15 * mm, topMargin=27 * mm, bottomMargin=17 * mm,
-                title="Reporte Ejecutivo MIP Retail Optimizer",
-                author="MIP Retail Optimizer Enterprise",
-            )
-            story = [
-                Paragraph("Reporte Ejecutivo", title_style),
-                Paragraph(
-                    "Resultados del modelo de localización y asignación de centros de distribución.",
-                    subtitle_style,
-                ),
-            ]
+            pdf = ExecutivePdf(orientation="L", unit="mm", format="A4")
+            pdf.set_margins(15, 26, 15)
+            pdf.set_auto_page_break(auto=True, margin=17)
+            pdf.set_title("Reporte Ejecutivo MIP Retail Optimizer")
+            pdf.set_author("MIP Retail Optimizer Enterprise")
+            pdf.add_page()
+            pdf.set_text_color(15, 23, 42)
+            pdf.set_font("Helvetica", "B", 20)
+            pdf.cell(0, 11, "Reporte Ejecutivo", ln=1)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(71, 85, 105)
+            pdf.cell(0, 7, "Resultados del modelo de localizacion y asignacion de centros de distribucion.", ln=1)
+            pdf.ln(4)
 
             kpis = [
-                ("Costo óptimo", f"${total_cost:,.2f} USD"),
+                ("Costo optimo", f"${total_cost:,.2f} USD"),
                 ("Ahorro vs. baseline", f"${saving:,.2f} USD ({saving_pct:.2f}%)"),
-                ("Centros activos", escape(", ".join(map(str, opened)) or "Ninguno")),
+                ("Centros activos", ", ".join(map(str, opened)) or "Ninguno"),
                 ("Nivel de servicio", f"{service_level:.2f}%"),
             ]
-            kpi_cells = [
-                Paragraph(
-                    f'<font size="8" color="#475569">{label}</font><br/>'
-                    f'<font name="Helvetica-Bold" size="11" color="#0F172A">{value}</font>',
-                    kpi_label,
-                )
-                for label, value in kpis
-            ]
-            kpi_table = Table(
-                [kpi_cells],
-                colWidths=[(landscape(A4)[0] - 30 * mm) / 4] * 4,
-                rowHeights=[19 * mm],
-            )
-            kpi_table.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, -1), pale),
-                ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#CBD5E1")),
-                ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.white),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-            ]))
-            story.extend([kpi_table, Spacer(1, 5 * mm)])
+            gap = 3
+            card_width = (pdf.w - 30 - gap * 3) / 4
+            card_y = pdf.get_y()
+            for index, (label, value) in enumerate(kpis):
+                x = 15 + index * (card_width + gap)
+                pdf.set_fill_color(241, 245, 249)
+                pdf.set_draw_color(203, 213, 225)
+                pdf.rect(x, card_y, card_width, 25, style="DF")
+                pdf.set_xy(x + 2, card_y + 4)
+                pdf.set_font("Helvetica", "", 8)
+                pdf.set_text_color(71, 85, 105)
+                pdf.cell(card_width - 4, 6, label, align="C")
+                pdf.set_xy(x + 2, card_y + 12)
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.set_text_color(15, 23, 42)
+                pdf.cell(card_width - 4, 8, value, align="C")
+            pdf.set_y(card_y + 30)
 
-            story.append(Paragraph("Matriz completa de asignación logística", heading))
-            matrix_rows = [["Centro", *zones, "Total unidades"]]
+            def draw_table(title: str, headers: list[str], rows: list[list[str]], widths: list[float]):
+                if pdf.get_y() + 17 > pdf.page_break_trigger:
+                    pdf.add_page()
+                pdf.set_font("Helvetica", "B", 12)
+                pdf.set_text_color(15, 23, 42)
+                pdf.cell(0, 8, title, ln=1)
+
+                def draw_row(values: list[str], is_header: bool = False):
+                    if pdf.get_y() + 8 > pdf.page_break_trigger:
+                        pdf.add_page()
+                    pdf.set_font("Helvetica", "B" if is_header else "", 8)
+                    pdf.set_fill_color(*( (37, 99, 235) if is_header else (255, 255, 255) ))
+                    pdf.set_text_color(*( (255, 255, 255) if is_header else (15, 23, 42) ))
+                    for cell_value, width in zip(values, widths):
+                        pdf.cell(width, 8, str(cell_value), border=1, align="C", fill=is_header)
+                    pdf.ln(8)
+
+                draw_row(headers, is_header=True)
+                for row in rows:
+                    draw_row(row)
+                pdf.ln(4)
+
+            content_width = pdf.w - 30
+            first_width, total_width = 25.0, 30.0
+            zone_width = (content_width - first_width - total_width) / max(1, len(zones))
+            matrix_rows = []
             for center in centers:
                 quantities = [flows.get((str(center), str(zone)), 0.0) for zone in zones]
                 matrix_rows.append([
                     str(center),
-                    *[f"{value:,.0f}" if value else "—" for value in quantities],
+                    *[f"{value:,.0f}" if value else "-" for value in quantities],
                     f"{sum(quantities):,.0f}",
                 ])
-            col_widths = [25 * mm] + [25 * mm] * len(zones) + [30 * mm]
-            matrix = Table(matrix_rows, repeatRows=1, colWidths=col_widths, hAlign="LEFT")
-            matrix.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), blue),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
-                ("BACKGROUND", (0, 1), (-1, -1), colors.white),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, pale]),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CBD5E1")),
-                ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("FONTSIZE", (0, 0), (-1, -1), 8),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ]))
-            story.extend([matrix, Spacer(1, 4 * mm)])
-            story.append(Paragraph("Detalle de rutas activas", heading))
-            route_rows = [["Centro origen", "Zona destino", "Unidades asignadas"]]
-            route_rows.extend([
+            draw_table(
+                "Matriz completa de asignacion logistica",
+                ["Centro", *[str(zone) for zone in zones], "Total unidades"],
+                matrix_rows,
+                [first_width] + [zone_width] * len(zones) + [total_width],
+            )
+
+            route_rows = [
                 [
-                    escape(str(item.get("Ubicacion", ""))),
-                    escape(str(item.get("Zona", ""))),
+                    str(item.get("Ubicacion", "")),
+                    str(item.get("Zona", "")),
                     f"{float(item.get('Cantidad_Enviada', 0) or 0):,.2f}",
                 ]
                 for item in assignments
-            ])
-            routes = Table(route_rows, repeatRows=1, colWidths=[55 * mm, 55 * mm, 55 * mm])
-            routes.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), navy),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, pale]),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CBD5E1")),
-                ("FONTSIZE", (0, 0), (-1, -1), 8),
-                ("ALIGN", (2, 1), (2, -1), "RIGHT"),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]))
-            story.append(routes)
-            doc.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
+            ]
+            draw_table(
+                "Detalle de rutas activas",
+                ["Centro origen", "Zona destino", "Unidades asignadas"],
+                route_rows,
+                [content_width * 0.34, content_width * 0.33, content_width * 0.33],
+            )
+            pdf.output(path)
             return {"ok": True, "ruta": path}
         except Exception as exc:
             return {"ok": False, "error": f"No se pudo generar el PDF: {exc}"}
-
     def resolver_escenario(self, params: dict[str, Any]) -> dict[str, Any]:
         """Resuelve un escenario y devuelve el contrato OptimizationResult."""
         if not isinstance(params, dict):

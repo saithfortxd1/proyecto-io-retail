@@ -134,5 +134,10 @@ dmypy.json
 Thumbs.db
 
 # Project specific
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
 *.csv
 !asignacion_logistica.csv
