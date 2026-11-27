@@ -73,6 +73,13 @@ export interface ChartImpactReport {
   source: 'gemini' | 'none';
 }
 
+export interface NativeSaveResult {
+  ok: boolean;
+  ruta?: string | null;
+  cancelado?: boolean;
+  error?: string;
+}
+
 export interface PyWebViewPayload extends ScenarioParameters {
   costos_envio: number[][];
   tarifas: number[][];
@@ -100,6 +107,16 @@ export interface PyWebViewApi {
     currentParams: ScenarioParameters;
     currentResult: OptimizationResult;
   }) => Promise<{ costImpactReport: string; capacityImpactReport: string }>;
+  guardar_archivo_base64?: (
+    filename: string,
+    base64Data: string,
+    fileTypes: string[]
+  ) => Promise<NativeSaveResult>;
+  guardar_pdf_ejecutivo?: (payload: {
+    resultado: OptimizationResult;
+    parametros: ScenarioParameters;
+    impacto?: ChartImpactReport;
+  }) => Promise<NativeSaveResult>;
 }
 
 declare global {

@@ -8,9 +8,49 @@ import {
 } from '../data/defaults.ts';
 import type {
   ChartImpactReport,
+  NativeSaveResult,
   OptimizationResult,
   ScenarioParameters,
 } from '../types.ts';
+
+function desktopApi() {
+  return typeof window !== 'undefined' ? window.pywebview?.api : undefined;
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return window.btoa(binary);
+}
+
+function downloadBlob(filename: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function saveGeneratedFile(
+  filename: string,
+  blob: Blob,
+  fileTypes: string[]
+): Promise<NativeSaveResult> {
+  const saveFile = desktopApi()?.guardar_archivo_base64;
+  if (typeof saveFile === 'function') {
+    return saveFile(filename, await blobToBase64(blob), fileTypes);
+  }
+
+  downloadBlob(filename, blob);
+  return { ok: true, ruta: null };
+}
 
 export function validateParameters(params: ScenarioParameters): ScenarioParameters {
   if (params.max_centros < 1 || params.max_centros > UBICACIONES_DEFAULT.length) {
@@ -194,7 +234,9 @@ export async function parseImportedScenarioFile(
   return { params: next, importedCount };
 }
 
-export function exportScenarioTemplateCsv(params: ScenarioParameters): void {
+export function exportScenarioTemplateCsv(
+  params: ScenarioParameters
+): Promise<NativeSaveResult> {
   const lines = ['parametro,valor'];
   params.costos_fijos.forEach((v, i) => lines.push(`costo_fijo_${i},${v}`));
   params.capacidades.forEach((v, i) => lines.push(`capacidad_${i},${v}`));
@@ -203,20 +245,15 @@ export function exportScenarioTemplateCsv(params: ScenarioParameters): void {
   lines.push(`baseline,${params.costo_baseline}`);
 
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'Plantilla_Escenario_MIP.csv';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  return saveGeneratedFile('Plantilla_Escenario_MIP.csv', blob, [
+    'Archivo CSV (*.csv)',
+  ]);
 }
 
 export function exportMatrixCsv(
   result: OptimizationResult,
   params: ScenarioParameters
-): void {
+): Promise<NativeSaveResult> {
   const headers = ['Centro', 'Zona', 'Unidades', 'Costo_Unit', 'Costo_Ruta', 'Pct_Demanda'];
   const lines = [headers.join(',')];
 
@@ -241,20 +278,15 @@ export function exportMatrixCsv(
   }
 
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'Matriz_Asignacion_Logistica.csv';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  return saveGeneratedFile('Matriz_Asignacion_Logistica.csv', blob, [
+    'Archivo CSV (*.csv)',
+  ]);
 }
 
 export function exportExecutiveExcel(
   result: OptimizationResult,
   params: ScenarioParameters
-): void {
+): Promise<NativeSaveResult> {
   const wb = XLSX.utils.book_new();
 
   const summaryRows = [
@@ -313,7 +345,13 @@ export function exportExecutiveExcel(
   ];
   XLSX.utils.book_append_sheet(wb, routesSheet, 'Asignaciones');
 
-  XLSX.writeFile(wb, 'Reporte_Ejecutivo_MIP_Retail_Optimizer.xlsx');
+  const workbookData = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([workbookData], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  return saveGeneratedFile('Reporte_Ejecutivo_MIP_Retail_Optimizer.xlsx', blob, [
+    'Libro de Excel (*.xlsx)',
+  ]);
 }
 
 function fmtUsd(value: number, decimals = 0): string {
@@ -331,7 +369,12 @@ export function exportDashboardPdf(
   result: OptimizationResult,
   params: ScenarioParameters,
   impact?: ChartImpactReport
-): void {
+): Promise<NativeSaveResult> {
+  const savePdf = desktopApi()?.guardar_pdf_ejecutivo;
+  if (typeof savePdf === 'function') {
+    return savePdf({ resultado: result, parametros: params, impacto: impact });
+  }
+
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -834,4 +877,5 @@ export function exportDashboardPdf(
   }
 
   doc.save('Reporte_Ejecutivo_MIP_Retail_Optimizer.pdf');
+  return Promise.resolve({ ok: true, ruta: null });
 }

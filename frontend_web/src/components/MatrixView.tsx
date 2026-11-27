@@ -47,15 +47,21 @@ export function MatrixView({ result, params, onNotify }: MatrixViewProps) {
   const totalUnits = rows.reduce((acc, r) => acc + r.unidades, 0);
   const totalVarCost = rows.reduce((acc, r) => acc + r.routeCost, 0);
 
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     if (!result || result.estado !== 'Optimal') {
       onNotify('Ejecuta una optimización antes de exportar.', 'warning');
       return;
     }
     try {
-      exportExecutiveExcel(result, params);
+      const saved = await exportExecutiveExcel(result, params);
+      if (!saved.ok) {
+        if (saved.cancelado) return;
+        throw new Error(saved.error ?? 'No se pudo guardar el reporte Excel.');
+      }
       onNotify(
-        'Reporte exportado: Reporte_Ejecutivo_MIP_Retail_Optimizer.xlsx',
+        saved.ruta
+          ? `Archivo guardado en: ${saved.ruta}`
+          : 'Reporte exportado: Reporte_Ejecutivo_MIP_Retail_Optimizer.xlsx',
         'success'
       );
     } catch (err) {
@@ -66,14 +72,23 @@ export function MatrixView({ result, params, onNotify }: MatrixViewProps) {
     }
   };
 
-  const handleExportCsv = () => {
+  const handleExportCsv = async () => {
     if (!result || result.estado !== 'Optimal') {
       onNotify('Ejecuta una optimización antes de exportar.', 'warning');
       return;
     }
     try {
-      exportMatrixCsv(result, params);
-      onNotify('CSV exportado: Matriz_Asignacion_Logistica.csv', 'success');
+      const saved = await exportMatrixCsv(result, params);
+      if (!saved.ok) {
+        if (saved.cancelado) return;
+        throw new Error(saved.error ?? 'No se pudo guardar la matriz CSV.');
+      }
+      onNotify(
+        saved.ruta
+          ? `Archivo guardado en: ${saved.ruta}`
+          : 'CSV exportado: Matriz_Asignacion_Logistica.csv',
+        'success'
+      );
     } catch (err) {
       onNotify(
         `No se pudo exportar el CSV: ${err instanceof Error ? err.message : 'Error'}`,

@@ -251,10 +251,19 @@ export function DashboardView({
     }
   };
 
-  const handleDownloadTemplate = () => {
+  const handleDownloadTemplate = async () => {
     try {
-      exportScenarioTemplateCsv(savedParams);
-      onNotify('Plantilla CSV descargada: Plantilla_Escenario_MIP.csv', 'success');
+      const saved = await exportScenarioTemplateCsv(savedParams);
+      if (!saved.ok) {
+        if (saved.cancelado) return;
+        throw new Error(saved.error ?? 'No se pudo guardar la plantilla.');
+      }
+      onNotify(
+        saved.ruta
+          ? `Archivo guardado en: ${saved.ruta}`
+          : 'Plantilla CSV descargada: Plantilla_Escenario_MIP.csv',
+        'success'
+      );
     } catch (err) {
       onNotify(
         `No se pudo generar la plantilla: ${err instanceof Error ? err.message : 'Error'}`,
@@ -263,15 +272,21 @@ export function DashboardView({
     }
   };
 
-  const handleExportPdf = () => {
+  const handleExportPdf = async () => {
     if (!lastResult || lastResult.estado !== 'Optimal') {
       onNotify('Ejecuta una optimización óptima antes de exportar el PDF.', 'warning');
       return;
     }
     try {
-      exportDashboardPdf(lastResult, displayParams, chartImpactReport);
+      const saved = await exportDashboardPdf(lastResult, displayParams, chartImpactReport);
+      if (!saved.ok) {
+        if (saved.cancelado) return;
+        throw new Error(saved.error ?? 'No se pudo guardar el reporte PDF.');
+      }
       onNotify(
-        'Reporte PDF descargado: Reporte_Ejecutivo_MIP_Retail_Optimizer.pdf',
+        saved.ruta
+          ? `Archivo guardado en: ${saved.ruta}`
+          : 'Reporte PDF descargado: Reporte_Ejecutivo_MIP_Retail_Optimizer.pdf',
         'success'
       );
     } catch (err) {
